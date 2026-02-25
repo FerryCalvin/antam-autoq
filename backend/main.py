@@ -9,8 +9,9 @@ from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import List, Optional
+from contextlib import asynccontextmanager
 from backend.config.database import engine, AsyncSessionLocal
 from backend.models import Base
 from backend.models.account_node import AccountNode
@@ -19,23 +20,26 @@ from backend.websockets import ws_manager
 from backend.bot_manager import BotManager
 from fastapi import WebSocket, WebSocketDisconnect
 
-app = FastAPI(title="Antam Auto-Queue Web Control Panel")
+# Lifespan for initializing DB
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    yield
+    # Shutdown logic can go here if needed
+
+app = FastAPI(title="Antam Auto-Queue Web Control Panel", lifespan=lifespan)
 bot_manager = BotManager(ws_manager)
 
 # Disable CORS restrictions for React default Vite port
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "*"],
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000", "*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Initialize DB
-@app.on_event("startup")
-async def startup():
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
 
 # Database Dependency
 async def get_db():
@@ -58,8 +62,7 @@ class AccountNodeResponse(AccountNodeCreate):
     is_active: bool
     status_message: str
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 # --- REST ENDPOINTS ---
 
