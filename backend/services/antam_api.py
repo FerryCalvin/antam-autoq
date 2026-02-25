@@ -114,6 +114,84 @@ def solve_math_question(question_text: str) -> str:
             return str(n1 // n2)
     return ""
 
+def solve_generic_math_captcha(page: ChromiumPage, logger_obj=logger, sync_broadcast=None, node_id=None):
+    """Answers the math captcha and injects the result into empty fields, returning True if found."""
+    try:
+        time.sleep(2)
+        page_html = page.html.lower()
+        
+        if "ditambah" in page_html or "dikurangi" in page_html or "dikali" in page_html:
+            msg = "🧮 Math Verification Detected! Deploying Solver..."
+            if sync_broadcast and node_id:
+                sync_broadcast(f"[Node {node_id}] {msg}")
+            logger_obj.info(msg)
+            
+            math_match = re.search(r'(\d+\s+(ditambah|dikurangi|dikali|dibagi)\s+\d+)', page_html)
+            
+            if math_match:
+                question = math_match.group(1)
+                answer = solve_math_question(question)
+                logger_obj.info(f"Solved Math: {question} = {answer}")
+                
+                # Inject answer into empty text/number fields (skipping email)
+                page.run_js(f'''
+                    let inputs = document.querySelectorAll('input[type="text"], input[type="number"]');
+                    for(let inp of inputs) {{
+                        if(inp.value === "" && !inp.name.includes("email")) {{
+                            inp.value = "{answer}";
+                        }}
+                    }}
+                ''')
+                return True
+    except Exception as ex:
+        logger_obj.warning(f"Math Captcha Error: {ex}")
+    return False
+
+def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, node_id: int, nama: str) -> bool:
+    """Automates the login sequence if the bot gets redirected to /masuk."""
+    sync_broadcast(f"[Node {node_id}] [{nama}] 🔑 Redirected to Login form. Starting Auto-Login...")
+    try:
+        # Navigate strictly to login page if not already there
+        if "masuk" not in page.url and "login" not in page.url:
+            page.get("https://antrean.logammulia.com/masuk", retry=0, timeout=15)
+            
+        page.wait.ele_loaded('@name=email', timeout=10)
+        
+        email_inp = page.ele('@name=email')
+        pass_inp = page.ele('@name=password')
+        
+        if email_inp: email_inp.input(email)
+        if pass_inp: pass_inp.input(password)
+        
+        # Check and solve captcha
+        solve_generic_math_captcha(page, logger, sync_broadcast, node_id)
+        
+        sync_broadcast(f"[Node {node_id}] [{nama}] 🚀 Submitting login credentials...")
+        page.run_js('''
+            let form = document.querySelector('form');
+            if(form) form.submit();
+            else {
+                let btns = Array.from(document.querySelectorAll('button'));
+                let submitBtn = btns.find(b => b.textContent.toLowerCase().includes('masuk') || b.textContent.toLowerCase().includes('login'));
+                if(submitBtn) submitBtn.click();
+            }
+        ''')
+        
+        # Wait for redirect to antrean home
+        page.wait.load_start(timeout=5)
+        time.sleep(3) # Let cookie sink into DrissionPage
+        
+        if "masuk" not in page.url and "login" not in page.url:
+            sync_broadcast(f"[Node {node_id}] [{nama}] ✅ Auto-Login Successful!")
+            return True
+        else:
+            sync_broadcast(f"[Node {node_id}] [{nama}] ❌ Auto-Login Failed. Still on login page. Retrying next loop.")
+            return False
+            
+    except Exception as e:
+        sync_broadcast(f"[Node {node_id}] [{nama}] ⚠️ Login automation error: {e}")
+        return False
+
 def submit_booking(page: ChromiumPage, profile_data: Dict[str, str], location_id: str, target_date: str) -> Dict[str, Any]:
     url = f"https://antrean.logammulia.com/antrean?site={location_id}"
     logger.info(f"[SNIPER] Starting sequence for {profile_data.get('nama_lengkap', 'Unknown')} at {location_id}")
@@ -171,44 +249,18 @@ def submit_booking(page: ChromiumPage, profile_data: Dict[str, str], location_id
             if(form) form.submit();
         ''')
         
-        # Helper to check Math Captcha
-        def handle_math_captcha(page_obj: ChromiumPage):
-            try:
-                time.sleep(2)
-                page_html = page_obj.html.lower()
-                
-                if "ditambah" in page_html or "dikurangi" in page_html or "dikali" in page_html:
-                    logger.info("[SNIPER] 🧮 Math Verification Detected! Deploying Solver...")
-                    math_match = re.search(r'(\d+\s+(ditambah|dikurangi|dikali|dibagi)\s+\d+)', page_html)
-                    
-                    if math_match:
-                        question = math_match.group(1)
-                        answer = solve_math_question(question)
-                        logger.info(f"[SNIPER] Solved Math: {question} = {answer}")
-                        
-                        # Inject answer
-                        page_obj.run_js(f'''
-                            let inputs = document.querySelectorAll('input[type="text"], input[type="number"]');
-                            for(let inp of inputs) {{
-                                if(inp.value === "") inp.value = "{answer}";
-                            }}
-                        ''')
-                        
-                        # Submit modal
-                        page_obj.run_js('''
-                            let btns = Array.from(document.querySelectorAll('button'));
-                            let submitBtn = btns.find(b => b.textContent.toLowerCase().includes('verifikasi') || b.textContent.toLowerCase().includes('lanjut') || b.textContent.toLowerCase().includes('submit'));
-                            if(submitBtn) submitBtn.click();
-                        ''')
-                        time.sleep(2)
-            except Exception as ex:
-                logger.warning(f"[SNIPER] Math Captcha Handling skipped/failed: {ex}")
-
         # Wait for the next page to load after form submission
         page.wait.load_start(timeout=5) 
         
-        # Attempt Math Captcha if blocked
-        handle_math_captcha(page)
+        # Attempt Math Captcha if blocked on an error modal or verification
+        if solve_generic_math_captcha(page, logger):
+            # If a modal appeared and we solved it, submit the modal
+            page.run_js('''
+                let btns = Array.from(document.querySelectorAll('button'));
+                let submitBtn = btns.find(b => b.textContent.toLowerCase().includes('verifikasi') || b.textContent.toLowerCase().includes('lanjut') || b.textContent.toLowerCase().includes('submit'));
+                if(submitBtn) submitBtn.click();
+            ''')
+            time.sleep(3) # Wait for final response
 
         # Check if URL reflects success
         is_success = "antrean-ambil" in page.url or "success" in page.url # Adjust to actual success criteria
@@ -293,8 +345,9 @@ def run_drission_bot_loop(node_id: int, config: Dict[str, Any], sync_broadcast, 
                    
                 break # Stop looping after sniper execution
             elif quota == -1:
-                sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🟡 HARAP LOGIN DAHULU! Jendela Browser butuh aksi manual Anda.")
-                time.sleep(5)
+                # Trigger Auto-Login flow
+                auto_login(page, config['email'], config['password'], sync_broadcast, node_id, nama_lengkap)
+                time.sleep(3) # Briefly pause before loop restarts to check quota on target page
             elif quota == -2:
                 sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🛡️ Cloudflare aktif. Membaca halaman... Silakan centang manual jika diminta di Chrome.")
                 time.sleep(5)
