@@ -72,23 +72,29 @@ def check_quota(page: ChromiumPage, location_id: str, target_date: str) -> int:
         # The URL /antrean sometimes intercepts us with a location selection form.
         try:
             if not page.ele('select#wakda', timeout=2):
-                loc_opt = page.ele(f'tag:option@@value={location_id}', timeout=1)
-                if loc_opt:
+                select_belm = page.ele('tag:select', timeout=1)
+                if select_belm:
                     logger.info(f"Boutique selection page detected. Forcing selection of {location_id}...")
-                    parent = loc_opt.parent('tag:select')
-                    if parent:
-                        parent.select(location_id)
-                        time.sleep(1)
-                    page.run_js('''
-                        let form = document.querySelector('form');
-                        if (form) {
-                            form.submit();
-                        } else {
-                            let btns = Array.from(document.querySelectorAll('button, input[type="submit"], input[type="button"]'));
-                            let submitBtn = btns.find(b => b.textContent.toLowerCase().includes('lanjut') || b.textContent.toLowerCase().includes('pilih') || (b.value && b.value.toLowerCase().includes('lanjut')));
-                            if(submitBtn) submitBtn.click();
-                        }
-                    ''')
+                    try:
+                        select_belm.select(location_id)
+                    except:
+                        # Fallback: find option containing the location_id string and select it
+                        for opt in select_belm.eles('tag:option'):
+                            if location_id.lower() in opt.text.lower() or location_id.lower() in str(opt.attr('value')).lower():
+                                select_belm.select(opt.attr('value'))
+                                break
+                                
+                    time.sleep(1)
+                    # Use native click to trigger JS listeners (which attach the CSRF/Turnstile Token)
+                    submit_btn = page.ele('text:Tampilkan Butik', timeout=1) or page.ele('css:button[type="submit"]')
+                    if submit_btn:
+                        submit_btn.click(by_js=True)
+                    else:
+                        page.run_js('''
+                            let btns = Array.from(document.querySelectorAll('button'));
+                            let btn = btns.find(b => b.textContent.toLowerCase().includes('tampilkan'));
+                            if(btn) btn.click();
+                        ''')
                     page.wait.load_start(timeout=5)
         except Exception as ex:
             logger.warning(f"Boutique Auto-Select skipped: {ex}")
@@ -269,20 +275,20 @@ def submit_booking(page: ChromiumPage, profile_data: Dict[str, str], location_id
             # Boutique selection auto-bypass for Sniper (in case we did reload)
             try:
                 if not page.ele('select#wakda', timeout=2):
-                    loc_opt = page.ele(f'tag:option@@value={location_id}', timeout=1)
-                    if loc_opt:
-                        parent = loc_opt.parent('tag:select')
-                        if parent: parent.select(location_id)
+                    select_belm = page.ele('tag:select', timeout=1)
+                    if select_belm:
+                        try:
+                            select_belm.select(location_id)
+                        except:
+                            for opt in select_belm.eles('tag:option'):
+                                if location_id.lower() in opt.text.lower() or location_id.lower() in str(opt.attr('value')).lower():
+                                    select_belm.select(opt.attr('value'))
+                                    break
+                                    
                         time.sleep(1)
-                        page.run_js('''
-                            let form = document.querySelector('form');
-                            if(form) form.submit();
-                            else {
-                                let btns = Array.from(document.querySelectorAll('button'));
-                                let submitBtn = btns.find(b => b.textContent.toLowerCase().includes('lanjut'));
-                                if(submitBtn) submitBtn.click();
-                            }
-                        ''')
+                        submit_btn = page.ele('text:Tampilkan Butik', timeout=1) or page.ele('css:button[type="submit"]')
+                        if submit_btn:
+                            submit_btn.click(by_js=True)
                         page.wait.load_start(timeout=5)
             except Exception:
                 pass
@@ -327,11 +333,19 @@ def submit_booking(page: ChromiumPage, profile_data: Dict[str, str], location_id
 
         logger.info("[SNIPER] Submitting form ...")
         
-        # Click submit using JS to bypass interceptors
-        page.run_js('''
-            const form = document.querySelector('form');
-            if(form) form.submit();
-        ''')
+        # Click submit natively to trigger JS event listeners (important for tokens)
+        final_btn = page.ele('text:Lanjut', timeout=1) or page.ele('text:Submit', timeout=1) or page.ele('css:button[type="submit"]')
+        if final_btn:
+            final_btn.click(by_js=True)
+        else:
+            page.run_js('''
+                const form = document.querySelector('form');
+                if(form) {
+                    let btn = form.querySelector('button');
+                    if(btn) btn.click();
+                    else form.submit();
+                }
+            ''')
         
         # Wait for the next page to load after form submission
         page.wait.load_start(timeout=5) 
