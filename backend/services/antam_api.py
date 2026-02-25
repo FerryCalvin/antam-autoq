@@ -9,22 +9,30 @@ from DrissionPage.errors import ElementNotFoundError
 
 logger = logging.getLogger(__name__)
 
-def _get_stealth_page(proxy: str = None) -> ChromiumPage:
+def _get_stealth_page(proxy: str = None, node_id: int = 1) -> ChromiumPage:
     """
     Initializes a DrissionPage ChromiumPage which inherently bypasses Cloudflare
     by avoiding CDP webdriver flags used by Playwright/Selenium natively.
     """
     co = ChromiumOptions()
     
+    # Give each node its own port and profile so multiple bots don't fight over the same Chrome
+    port = 9222 + int(node_id)
+    co.set_local_port(port)
+    
+    user_data_dir = os.path.join(os.getcwd(), f"chrome_profile_{node_id}")
+    co.set_user_data_path(user_data_dir)
+    
     # Hide automation features and disable the infobars (unsupported command-line flag warning)
     co.set_argument('--disable-blink-features=AutomationControlled')
     co.set_argument('--disable-infobars')
-    co.set_user_agent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+    # DO NOT override user_agent! It breaks Sec-CH-UA sync causing Turnstile infinite loops!
     
     if proxy:
         co.set_proxy(proxy)
         
     page = ChromiumPage(addr_or_opts=co)
+    page.set.timeouts(page_load=15, script=15)
     return page
 
 def check_quota(page: ChromiumPage, location_id: str, target_date: str) -> int:
@@ -50,8 +58,11 @@ def check_quota(page: ChromiumPage, location_id: str, target_date: str) -> int:
                     return -2 # Still missing, report blocked
 
         # Safe to navigate because we either aren't on the site yet, or the dropdown was present
-        page.get(url, retry=0)
-        
+        try:
+            page.get(url, retry=0, timeout=15)
+        except Exception:
+            pass # Timeout is normal if Cloudflare delays loading; we let post-checks handle it
+            
         # Post-navigation check
         if "/masuk" in page.url or "/login" in page.url:
             return -1
@@ -109,7 +120,11 @@ def submit_booking(page: ChromiumPage, profile_data: Dict[str, str], location_id
     
     try:
         # 1. Navigate
-        page.get(url, retry=0)
+        try:
+            page.get(url, retry=0, timeout=15)
+        except Exception:
+            pass
+            
         if not page.wait.ele_loaded('select#wakda', timeout=20):
              return {"success": False, "error": "Select dropdown never loaded during sniper execution."}
         
@@ -235,7 +250,7 @@ def run_drission_bot_loop(node_id: int, config: Dict[str, Any], sync_broadcast, 
     
     page = None
     try:
-        page = _get_stealth_page(proxy)
+        page = _get_stealth_page(proxy, node_id)
         
         while True:
             # IMPORTANT: Check if we have been cancelled by the kill switch!
