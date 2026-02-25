@@ -112,6 +112,7 @@ async def api_start_node(node_id: int, db: AsyncSession = Depends(get_db)):
         "nik": db_node.nik,
         "no_hp": db_node.no_hp,
         "email": db_node.email,
+        "password": db_node.password,
         "target_location": db_node.target_location,
         "target_date": db_node.target_date,
         "proxy": db_node.proxy
