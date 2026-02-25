@@ -50,6 +50,11 @@ def check_quota(page: ChromiumPage, location_id: str, target_date: str) -> int:
         except Exception:
             pass # Timeout is normal if Cloudflare delays loading; we let post-checks handle it
             
+        # --- IP BLOCK AUTO-COOLDOWN BUSTER ---
+        if page.ele('text:pemblokiran IP', timeout=1) or page.ele('text:An Error Was Encountered', timeout=1):
+            logger.warning("IP Ban / Rate Limit Detected!")
+            return -3
+            
         # --- SPLASH SCREEN BUSTER ---
         # If we see the Splash Screen, it means we are purely guests and need to login!
         try:
@@ -404,6 +409,9 @@ def run_drission_bot_loop(node_id: int, config: Dict[str, Any], sync_broadcast, 
             elif quota == -2:
                 sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🛡️ Cloudflare aktif. Membaca halaman... Silakan centang manual jika diminta di Chrome.")
                 time.sleep(5)
+            elif quota == -3:
+                sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] ⛔ PEMBLOKIRAN IP TERDETEKSI! Server Antam memblokir akses sementara karena terlalu banyak request. Bot akan beristirahat selama 3 menit sebelum mencoba lagi...")
+                time.sleep(180) # 3-minute cooldown
             else:
                 sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🔴 Quota full. Retrying in 10s...")
                 time.sleep(10)
