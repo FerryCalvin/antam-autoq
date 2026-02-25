@@ -1,0 +1,92 @@
+import asyncio
+import logging
+from typing import Dict, Any
+
+from backend.services.antam_api import check_quota, submit_booking
+
+class BotManager:
+    """
+    Manages isolated Playwright instances for each Account Node asynchronously.
+    """
+    def __init__(self, websocket_manager):
+        # Store both task and config
+        self.nodes: Dict[int, Dict[str, Any]] = {}
+        self.ws_manager = websocket_manager
+
+    async def start_node(self, node_id: int, config: Dict[str, Any]):
+        """Starts an infinite loop for a specific Bot Node."""
+        if node_id in self.nodes:
+            await self.ws_manager.broadcast(f"[Node {node_id}] Warning: Node is already running.")
+            return
+
+        await self.ws_manager.broadcast(f"[Node {node_id}] 🟢 Starting Bot for {config['nama_lengkap']} targeting {config['target_location']}")
+
+        # Wrap the actual logic in an isolated asyncio task
+        task = asyncio.create_task(self._bot_loop(node_id, config))
+        self.nodes[node_id] = {"task": task, "config": config}
+
+    async def stop_node(self, node_id: int):
+        """Cancels a running Node Task."""
+        if node_id in self.nodes:
+            self.nodes[node_id]["task"].cancel()
+            del self.nodes[node_id]
+            await self.ws_manager.broadcast(f"[Node {node_id}] 🔴 Bot task manually stopped.")
+        else:
+            await self.ws_manager.broadcast(f"[Node {node_id}] Not currently running.")
+
+    async def _bot_loop(self, node_id: int, config: Dict[str, Any]):
+        """The core logic that runs isolated in the background per Node."""
+        
+        target_location = config['target_location']
+        target_date = config['target_date']
+        proxy = config.get('proxy')
+        nama_lengkap = config['nama_lengkap']
+        nik = config['nik']
+
+        try:
+            while True:
+                await self.ws_manager.broadcast(f"[Node {node_id}] [{nama_lengkap}] ⏳ Checking quota for {target_location} (Proxy: {proxy or 'None'})")
+                
+                quota = await check_quota(target_location, target_date, proxy=proxy)
+                
+                if quota > 0:
+                    await self.ws_manager.broadcast(f"[Node {node_id}] [{nama_lengkap}] 🟢 SUCCESS: Found {quota} slots! Triggering Sniper...")
+                    # Trigger submit_booking
+                    config_payload = {
+                        "nama_lengkap": config['nama_lengkap'],
+                        "nik": config['nik'],
+                        "no_hp": config['no_hp'],
+                        "email": config['email']
+                    }
+                    res = await submit_booking(config_payload, target_location, target_date, proxy=proxy)
+                    
+                    if res.get("success"):
+                       await self.ws_manager.broadcast(f"[Node {node_id}] [{nama_lengkap}] 🏆 BOOKING SUCCESSFUL! URL: {res.get('url')}")
+                       
+                       # --- KILL SWITCH ---
+                       # Stop all other running nodes that use the same NIK
+                       kill_targets = []
+                       for other_id, node_data in self.nodes.items():
+                           if other_id != node_id and node_data['config'].get('nik') == nik:
+                               kill_targets.append(other_id)
+                               
+                       for t_id in kill_targets:
+                           self.nodes[t_id]["task"].cancel()
+                           del self.nodes[t_id]
+                           await self.ws_manager.broadcast(f"[System] 🛑 KILL SWITCH ACTIVATED: Node {t_id} stopped because NIK {nik} already secured a booking.")
+
+                    else:
+                       await self.ws_manager.broadcast(f"[Node {node_id}] [{nama_lengkap}] 🔴 SNIPER FAILED: {res.get('error')}")
+                       
+                    break # Stop looping after sniper execution
+                else:
+                    await self.ws_manager.broadcast(f"[Node {node_id}] [{nama_lengkap}] 🔴 Quota full. Retrying in 10s...")
+                    
+                await asyncio.sleep(10)
+                
+        except asyncio.CancelledError:
+            pass # Task was stopped normally
+        except Exception as e:
+            await self.ws_manager.broadcast(f"[Node {node_id}] 🔴 Critical Error: {str(e)}")
+            if node_id in self.nodes:
+                del self.nodes[node_id]
