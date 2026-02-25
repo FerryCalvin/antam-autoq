@@ -6,7 +6,7 @@ echo.
 
 echo [1/2] Menyalakan Backend (FastAPI - Python) di port 8000...
 :: Start backend properly to respect Windows asyncio policy
-start "Antam Backend" cmd /k "python backend/main.py"
+start "Antam Backend" cmd /k "python -m backend.main"
 
 echo [2/2] Menyalakan Frontend (React) di port 3000...
 :: Navigate to web_panel directory and start the dev server
