@@ -94,7 +94,7 @@ def check_quota(page: ChromiumPage, location_id: str, target_date: str) -> int:
             logger.warning(f"Boutique Auto-Select skipped: {ex}")
             
         # Wait for the select box (wakda / quota options)
-        if not page.wait.ele_loaded('select#wakda', timeout=15):
+        if not page.wait.ele_displayed('select#wakda', timeout=15):
             if "/masuk" in page.url or "/login" in page.url:
                  return -1
             return -2
@@ -183,7 +183,7 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
             
         # ⏳ Wait up to 60 seconds for Cloudflare / Splash Screens to be solved by the user or the bot
         sync_broadcast(f"[Node {node_id}] [{nama}] 🛡️ Waiting up to 60s for Cloudflare/Splash Form to appear...")
-        if not page.wait.ele_loaded('@name=email', timeout=60):
+        if not page.wait.ele_displayed('@name=email', timeout=60):
             sync_broadcast(f"[Node {node_id}] [{nama}] ❌ Timeout! Cloudflare took too long or form not found. Restarting loop...")
             return False
             
@@ -280,7 +280,7 @@ def submit_booking(page: ChromiumPage, profile_data: Dict[str, str], location_id
             except Exception:
                 pass
             
-        if not page.wait.ele_loaded('select#wakda', timeout=20):
+        if not page.wait.ele_displayed('select#wakda', timeout=20):
              return {"success": False, "error": "Select dropdown never loaded during sniper execution."}
         
         # 2. Find best available slot
