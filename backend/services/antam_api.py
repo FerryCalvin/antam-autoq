@@ -179,7 +179,7 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
     try:
         # Navigate strictly to login page if not already there
         if "masuk" not in page.url and "login" not in page.url:
-            page.get("https://antrean.logammulia.com/login", retry=0, timeout=15)
+            page.get("https://antrean.logammulia.com/masuk", retry=0, timeout=15)
             
         # ⏳ Wait up to 60 seconds for the email input to appear in the DOM
         sync_broadcast(f"[Node {node_id}] [{nama}] 🛡️ Waiting up to 60s for Cloudflare/Splash Form to appear...")
