@@ -43,47 +43,69 @@ class BotManager:
         nama_lengkap = config['nama_lengkap']
         nik = config['nik']
 
+        from playwright.async_api import async_playwright
+        from backend.services.antam_api import _get_stealth_page
+        
         try:
-            while True:
-                await self.ws_manager.broadcast(f"[Node {node_id}] [{nama_lengkap}] ⏳ Checking quota for {target_location} (Proxy: {proxy or 'None'})")
-                
-                quota = await check_quota(target_location, target_date, proxy=proxy)
-                
-                if quota > 0:
-                    await self.ws_manager.broadcast(f"[Node {node_id}] [{nama_lengkap}] 🟢 SUCCESS: Found {quota} slots! Triggering Sniper...")
-                    # Trigger submit_booking
-                    config_payload = {
-                        "nama_lengkap": config['nama_lengkap'],
-                        "nik": config['nik'],
-                        "no_hp": config['no_hp'],
-                        "email": config['email']
-                    }
-                    res = await submit_booking(config_payload, target_location, target_date, proxy=proxy)
+            async with async_playwright() as p:
+                launch_args = {
+                    "channel": "chrome",
+                    "headless": False, 
+                    "args": ["--disable-blink-features=AutomationControlled"]
+                }
+                if proxy:
+                    launch_args["proxy"] = {"server": proxy}
                     
-                    if res.get("success"):
-                       await self.ws_manager.broadcast(f"[Node {node_id}] [{nama_lengkap}] 🏆 BOOKING SUCCESSFUL! URL: {res.get('url')}")
-                       
-                       # --- KILL SWITCH ---
-                       # Stop all other running nodes that use the same NIK
-                       kill_targets = []
-                       for other_id, node_data in self.nodes.items():
-                           if other_id != node_id and node_data['config'].get('nik') == nik:
-                               kill_targets.append(other_id)
+                browser = await p.chromium.launch(**launch_args)
+                context = await browser.new_context(
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                )
+                page = await _get_stealth_page(context)
+                
+                try:
+                    while True:
+                        await self.ws_manager.broadcast(f"[Node {node_id}] [{nama_lengkap}] ⏳ Checking quota for {target_location} (Proxy: {proxy or 'None'})")
+                        
+                        quota = await check_quota(page, target_location, target_date)
+                        
+                        if quota > 0:
+                            await self.ws_manager.broadcast(f"[Node {node_id}] [{nama_lengkap}] 🟢 SUCCESS: Found {quota} slots! Triggering Sniper...")
+                            # Trigger submit_booking
+                            config_payload = {
+                                "nama_lengkap": config['nama_lengkap'],
+                                "nik": config['nik'],
+                                "no_hp": config['no_hp'],
+                                "email": config['email']
+                            }
+                            res = await submit_booking(page, config_payload, target_location, target_date)
+                            
+                            if res.get("success"):
+                               await self.ws_manager.broadcast(f"[Node {node_id}] [{nama_lengkap}] 🏆 BOOKING SUCCESSFUL! URL: {res.get('url')}")
                                
-                       for t_id in kill_targets:
-                           self.nodes[t_id]["task"].cancel()
-                           del self.nodes[t_id]
-                           await self.ws_manager.broadcast(f"[System] 🛑 KILL SWITCH ACTIVATED: Node {t_id} stopped because NIK {nik} already secured a booking.")
+                               # --- KILL SWITCH ---
+                               # Stop all other running nodes that use the same NIK
+                               kill_targets = []
+                               for other_id, node_data in self.nodes.items():
+                                   if other_id != node_id and node_data['config'].get('nik') == nik:
+                                       kill_targets.append(other_id)
+                                       
+                               for t_id in kill_targets:
+                                   self.nodes[t_id]["task"].cancel()
+                                   del self.nodes[t_id]
+                                   await self.ws_manager.broadcast(f"[System] 🛑 KILL SWITCH ACTIVATED: Node {t_id} stopped because NIK {nik} already secured a booking.")
 
-                    else:
-                       await self.ws_manager.broadcast(f"[Node {node_id}] [{nama_lengkap}] 🔴 SNIPER FAILED: {res.get('error')}")
-                       
-                    break # Stop looping after sniper execution
-                else:
-                    await self.ws_manager.broadcast(f"[Node {node_id}] [{nama_lengkap}] 🔴 Quota full. Retrying in 10s...")
+                            else:
+                               await self.ws_manager.broadcast(f"[Node {node_id}] [{nama_lengkap}] 🔴 SNIPER FAILED: {res.get('error')}")
+                               
+                            break # Stop looping after sniper execution
+                        else:
+                            await self.ws_manager.broadcast(f"[Node {node_id}] [{nama_lengkap}] 🔴 Quota full. Retrying in 10s...")
+                            
+                        await asyncio.sleep(10)
+                finally:
+                    await context.close()
+                    await browser.close()
                     
-                await asyncio.sleep(10)
-                
         except asyncio.CancelledError:
             pass # Task was stopped normally
         except Exception as e:

@@ -63,7 +63,12 @@ function App() {
     };
 
     connectWs();
-    return () => ws.current?.close();
+    return () => {
+      if (ws.current) {
+        ws.current.onclose = null; // Prevent reconnect loop from unmount
+        ws.current.close();
+      }
+    };
   }, []);
 
   // Auto-scroll logs
