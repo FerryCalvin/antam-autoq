@@ -26,7 +26,10 @@ async def lifespan(app: FastAPI):
     # Startup
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    yield
+    try:
+        yield
+    except asyncio.CancelledError:
+        pass
     # Shutdown logic can go here if needed
 
 app = FastAPI(title="Antam Auto-Queue Web Control Panel", lifespan=lifespan)
