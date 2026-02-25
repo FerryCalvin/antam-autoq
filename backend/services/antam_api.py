@@ -16,8 +16,9 @@ def _get_stealth_page(proxy: str = None) -> ChromiumPage:
     """
     co = ChromiumOptions()
     
-    # Hide automation features
+    # Hide automation features and disable the infobars (unsupported command-line flag warning)
     co.set_argument('--disable-blink-features=AutomationControlled')
+    co.set_argument('--disable-infobars')
     co.set_user_agent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
     
     if proxy:
@@ -35,8 +36,9 @@ def check_quota(page: ChromiumPage, location_id: str, target_date: str) -> int:
     logger.info(f"Navigating to {url} to check slots...")
 
     try:
-        # Pre-flight check: Is the page currently blocked?
-        if page.url != "about:blank":
+        # Pre-flight check: Is the page currently blocked on a previous reload?
+        # Only do this check if we are actually ON the antam site.
+        if "logammulia.com" in page.url:
             if "/masuk" in page.url or "/login" in page.url:
                 return -1
                 
@@ -47,7 +49,7 @@ def check_quota(page: ChromiumPage, location_id: str, target_date: str) -> int:
                 if not page.wait.ele_loaded('select#wakda', timeout=10):
                     return -2 # Still missing, report blocked
 
-        # Safe to navigate
+        # Safe to navigate because we either aren't on the site yet, or the dropdown was present
         page.get(url, retry=0)
         
         # Post-navigation check
