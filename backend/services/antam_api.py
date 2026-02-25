@@ -155,9 +155,10 @@ def solve_generic_math_captcha(page: ChromiumPage, logger_obj=logger, sync_broad
             math_match = re.search(r'(\d+\s+(ditambah|dikurangi|dikali|dibagi)\s+\d+)', page_html)
             
             if math_match:
-                question = math_match.group(1)
                 answer = solve_math_question(question)
                 logger_obj.info(f"Solved Math: {question} = {answer}")
+                if sync_broadcast and node_id:
+                    sync_broadcast(f"[Node {node_id}] 🧠 Solved Math: {question} = {answer}")
                 
                 # Inject answer into empty text/number fields (skipping email)
                 page.run_js(f'''
@@ -177,9 +178,9 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
     """Automates the login sequence if the bot gets redirected to /masuk."""
     sync_broadcast(f"[Node {node_id}] [{nama}] 🔑 Redirected to Login form. Starting Auto-Login...")
     try:
-        # Navigate strictly to login page if not already there
-        if "login" not in page.url:
-            page.get("https://antrean.logammulia.com/login", retry=0, timeout=15)
+        # Navigate strictly to the root domain login page if not already there
+        if page.url.rstrip('/') != "https://antrean.logammulia.com" and "login" not in page.url:
+            page.get("https://antrean.logammulia.com/", retry=0, timeout=15)
             
         # ⏳ Wait up to 60 seconds for the password input to appear in the DOM
         sync_broadcast(f"[Node {node_id}] [{nama}] 🛡️ Waiting up to 60s for Cloudflare/Splash Form to appear...")
@@ -206,12 +207,18 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
         email_inp = page.ele('@name=email') or page.ele('css:input[type="email"]') or page.ele('@name=username')
         
         if email_inp: 
-            email_inp.clear()
-            email_inp.input(email)
+            try:
+                email_inp.clear()
+                email_inp.input(email)
+            except Exception as e:
+                logger.warning(f"Ignorable invalid element error for email: {e}")
             
         if pass_inp: 
-            pass_inp.clear()
-            pass_inp.input(password)
+            try:
+                pass_inp.clear()
+                pass_inp.input(password)
+            except Exception as e:
+                logger.warning(f"Ignorable invalid element error for password: {e}")
         
         # Check and solve captcha
         solve_generic_math_captcha(page, logger, sync_broadcast, node_id)
@@ -235,12 +242,12 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
         page.wait.load_start(timeout=5)
         time.sleep(4) # Let cookie sink into DrissionPage
         
-        # Only verify success if the URL completely escaped the login bounds
-        if "login" not in page.url:
+        # Only verify success if the password field is no longer on the screen
+        if not page.ele('css:input[type="password"]', timeout=2):
             sync_broadcast(f"[Node {node_id}] [{nama}] ✅ Auto-Login Successful! Returning to Quota Target...")
             return True
         else:
-            sync_broadcast(f"[Node {node_id}] [{nama}] ❌ Login Failed. Retrying...")
+            sync_broadcast(f"[Node {node_id}] [{nama}] ❌ Login Form still present (Wrong Password/Captcha?). Retrying...")
             return False
             
     except Exception as e:
