@@ -181,22 +181,22 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
         if "masuk" not in page.url and "login" not in page.url:
             page.get("https://antrean.logammulia.com/login", retry=0, timeout=15)
             
-        # ⏳ Wait up to 60 seconds for Cloudflare / Splash Screens to be solved by the user or the bot
+        # ⏳ Wait up to 60 seconds for the email input to appear in the DOM
         sync_broadcast(f"[Node {node_id}] [{nama}] 🛡️ Waiting up to 60s for Cloudflare/Splash Form to appear...")
-        if not page.wait.ele_displayed('@name=email', timeout=60):
+        email_inp = page.ele('@name=email', timeout=60)
+        if not email_inp:
             sync_broadcast(f"[Node {node_id}] [{nama}] ❌ Timeout! Cloudflare took too long or form not found. Restarting loop...")
             return False
             
         # Try to close any overlaying Splash Screen if one appears on the Login page
         try:
             splash_close = page.ele('text:Tutup', timeout=1) or page.ele('css:.close', timeout=1)
-            if splash_close and splash_close.is_displayed:
+            if splash_close and splash_close.is_displayed():
                 splash_close.click(by_js=True)
                 time.sleep(1)
         except:
             pass
         
-        email_inp = page.ele('@name=email')
         pass_inp = page.ele('@name=password')
         
         if email_inp: 
@@ -211,25 +211,18 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
         
         sync_broadcast(f"[Node {node_id}] [{nama}] 🚀 Submitting login credentials...")
         
-        # We must specifically submit the LOGIN form, not the CF form
-        try:
-            # First look for the login button
-            submit_btn = page.ele('text:Masuk', timeout=1) or page.ele('text:Login', timeout=1) or page.ele('css:button[type="submit"]')
-            if submit_btn:
-                submit_btn.click(by_js=True) # JS click bypasses overlays
-            else:
-                email_inp.submit()
-        except Exception as e:
-            logger.warning(f"Could not click submit normally: {e}. Falling back to JS form submit.")
-            page.run_js('''
-                let forms = document.querySelectorAll('form');
-                for(let f of forms) {
-                    if(f.innerHTML.includes('password') || f.innerHTML.includes('email')) {
-                        f.submit();
-                        break;
-                    }
+        # We must specifically submit the CORRECT form containing the password field natively via JS
+        page.run_js('''
+            let forms = document.querySelectorAll('form');
+            for(let f of forms) {
+                if(f.innerHTML.includes('password') || f.innerHTML.includes('email')) {
+                    let btn = f.querySelector('button[type="submit"], input[type="submit"], button.btn-primary, button.btn-login');
+                    if(btn) btn.click();
+                    else f.submit();
+                    break;
                 }
-            ''')
+            }
+        ''')
         
         # Wait for redirect to antrean home
         page.wait.load_start(timeout=5)
