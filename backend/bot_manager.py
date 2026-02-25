@@ -112,8 +112,11 @@ class BotManager:
                                
                             break # Stop looping after sniper execution
                         elif quota == -1:
-                            await self.ws_manager.broadcast(f"[Node {node_id}] [{nama_lengkap}] � HARAP LOGIN DAHULU! Jendela Browser butuh aksi manual Anda.")
+                            await self.ws_manager.broadcast(f"[Node {node_id}] [{nama_lengkap}] 🟡 HARAP LOGIN DAHULU! Jendela Browser butuh aksi manual Anda.")
                             await asyncio.sleep(5) # Slow down loop to let user login
+                        elif quota == -2:
+                            await self.ws_manager.broadcast(f"[Node {node_id}] [{nama_lengkap}] 🛡️ Cloudflare aktif. Membaca halaman... Silakan centang manual jika diminta di Chrome.")
+                            await asyncio.sleep(5) # Wait for user to verify, then check again
                         else:
                             await self.ws_manager.broadcast(f"[Node {node_id}] [{nama_lengkap}] 🔴 Quota full. Retrying in 10s...")
                             await asyncio.sleep(10)

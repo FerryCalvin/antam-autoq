@@ -48,7 +48,19 @@ async def check_quota(page, location_id: str, target_date: str) -> int:
     logger.info(f"Navigating to {url} to check slots...")
 
     try:
-        await page.goto(url, timeout=30000)
+        # Pre-navigation check: Avoid reloading if user is currently solving Cloudflare
+        if page.url != "about:blank":
+            html_content = await page.content()
+            if "cloudflare" in html_content.lower() or "challenge" in html_content.lower() or "verifying you are human" in html_content.lower() or "just a moment" in html_content.lower():
+                logger.warning("Cloudflare challenge in progress. Pausing reload sequence...")
+                try:
+                    await page.wait_for_selector('select#wakda', timeout=10000)
+                except Exception:
+                    return -2 # Special code for "Cloudflare Blocked"
+        
+        # If we passed the check or it's a fresh page, navigate normally
+        if await page.query_selector('select#wakda') is None:
+            await page.goto(url, timeout=30000)
         
         # Check if we got redirected to the login page
         if "/masuk" in page.url or "/login" in page.url:
@@ -58,13 +70,14 @@ async def check_quota(page, location_id: str, target_date: str) -> int:
             
         # Wait for either the Cloudflare challenge to pass or the select box to appear
         try:
-            await page.wait_for_selector('select#wakda', timeout=20000)
+            await page.wait_for_selector('select#wakda', timeout=15000)
         except Exception:
             logger.warning("Timeout waiting for 'select#wakda'. Cloudflare block or page structural change.")
             # We can dump HTML for debugging
             html_content = await page.content()
-            if "cloudflare" in html_content.lower() or "challenge" in html_content.lower():
+            if "cloudflare" in html_content.lower() or "challenge" in html_content.lower() or "verifying you are human" in html_content.lower():
                  logger.error("Cloudflare challenge detected and not passed.")
+                 return -2
             elif "/masuk" in page.url or "/login" in page.url:
                  return -1
             return 0
