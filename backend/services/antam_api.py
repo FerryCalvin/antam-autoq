@@ -44,20 +44,7 @@ def check_quota(page: ChromiumPage, location_id: str, target_date: str) -> int:
     logger.info(f"Navigating to {url} to check slots...")
 
     try:
-        # Pre-flight check: Is the page currently blocked on a previous reload?
-        # Only do this check if we are actually ON the antam site.
-        if "logammulia.com" in page.url:
-            if "/masuk" in page.url or "/login" in page.url:
-                return -1
-                
-            # If the dropdown is MISSING, it means we are stuck on CF or loading
-            select_wakda = page.ele('select#wakda', timeout=1)
-            if not select_wakda:
-                # Give it a longer wait to see if it resolves
-                if not page.wait.ele_loaded('select#wakda', timeout=10):
-                    return -2 # Still missing, report blocked
-
-        # Safe to navigate because we either aren't on the site yet, or the dropdown was present
+        # Navigate directly to the queuing page
         try:
             page.get(url, retry=0, timeout=15)
         except Exception:
@@ -189,7 +176,7 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
     try:
         # Navigate strictly to login page if not already there
         if "masuk" not in page.url and "login" not in page.url:
-            page.get("https://antrean.logammulia.com/masuk", retry=0, timeout=15)
+            page.get("https://antrean.logammulia.com/login", retry=0, timeout=15)
             
         page.wait.ele_loaded('@name=email', timeout=10)
         
