@@ -18,6 +18,23 @@ async def _get_stealth_page(context):
     page = await context.new_page()
     stealth = Stealth()
     await stealth.apply_stealth_async(page)
+    
+    # Extra Cloudflare Turnstile overrides
+    await page.add_init_script("""
+        Object.defineProperty(navigator, 'webdriver', {
+            get: () => undefined
+        });
+        window.navigator.chrome = {
+            runtime: {},
+        };
+        Object.defineProperty(navigator, 'plugins', {
+            get: () => [1, 2, 3],
+        });
+        Object.defineProperty(navigator, 'languages', {
+            get: () => ['id-ID', 'id', 'en-US', 'en'],
+        });
+    """)
+    
     return page
 
 async def check_quota(page, location_id: str, target_date: str) -> int:
@@ -33,6 +50,12 @@ async def check_quota(page, location_id: str, target_date: str) -> int:
     try:
         await page.goto(url, timeout=30000)
         
+        # Check if we got redirected to the login page
+        if "/masuk" in page.url or "/login" in page.url:
+            logger.error("DILIHKAN KE HALAMAN LOGIN! Harap login secara manual terlebih dahulu di jendela Chrome ini.")
+            await asyncio.sleep(10) # Give user a moment to realize
+            return -1 # Special code for "Needs Login"
+            
         # Wait for either the Cloudflare challenge to pass or the select box to appear
         try:
             await page.wait_for_selector('select#wakda', timeout=20000)
@@ -42,6 +65,8 @@ async def check_quota(page, location_id: str, target_date: str) -> int:
             html_content = await page.content()
             if "cloudflare" in html_content.lower() or "challenge" in html_content.lower():
                  logger.error("Cloudflare challenge detected and not passed.")
+            elif "/masuk" in page.url or "/login" in page.url:
+                 return -1
             return 0
 
         # Page is loaded, let's parse the HTML using BeautifulSoup

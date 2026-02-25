@@ -51,7 +51,20 @@ class BotManager:
                 launch_args = {
                     "channel": "chrome",
                     "headless": False, 
-                    "args": ["--disable-blink-features=AutomationControlled"]
+                    # Comprehensive Cloudflare Evasion Arguments
+                    "args": [
+                        "--disable-blink-features=AutomationControlled",
+                        "--disable-features=IsolateOrigins,site-per-process",
+                        "--disable-site-isolation-trials",
+                        "--no-sandbox",
+                        "--disable-setuid-sandbox",
+                        "--disable-web-security",
+                        "--start-maximized",
+                        "--disable-dev-shm-usage",
+                        "--disable-accelerated-2d-canvas",
+                        "--disable-gpu"
+                    ],
+                    "ignore_default_args": ["--enable-automation"]
                 }
                 if proxy:
                     launch_args["proxy"] = {"server": proxy}
@@ -98,10 +111,12 @@ class BotManager:
                                await self.ws_manager.broadcast(f"[Node {node_id}] [{nama_lengkap}] 🔴 SNIPER FAILED: {res.get('error')}")
                                
                             break # Stop looping after sniper execution
+                        elif quota == -1:
+                            await self.ws_manager.broadcast(f"[Node {node_id}] [{nama_lengkap}] � HARAP LOGIN DAHULU! Jendela Browser butuh aksi manual Anda.")
+                            await asyncio.sleep(5) # Slow down loop to let user login
                         else:
                             await self.ws_manager.broadcast(f"[Node {node_id}] [{nama_lengkap}] 🔴 Quota full. Retrying in 10s...")
-                            
-                        await asyncio.sleep(10)
+                            await asyncio.sleep(10)
                 finally:
                     try:
                         await context.close()
