@@ -85,16 +85,16 @@ def check_quota(page: ChromiumPage, location_id: str, target_date: str) -> int:
                                 break
                                 
                     time.sleep(1)
-                    # Use native click to trigger JS listeners (which attach the CSRF/Turnstile Token)
+                    # Use native trusted click to satisfy Turnstile's IsTrusted event listener
                     submit_btn = page.ele('text:Tampilkan Butik', timeout=1) or page.ele('css:button[type="submit"]')
                     if submit_btn:
-                        submit_btn.click(by_js=True)
+                        try:
+                            submit_btn.click() # Native True Click
+                        except Exception as e:
+                            logger.warning(f"Native click failed for Tampilkan Butik, trying generic submit: {e}")
+                            select_belm.parent('tag:form').submit()
                     else:
-                        page.run_js('''
-                            let btns = Array.from(document.querySelectorAll('button'));
-                            let btn = btns.find(b => b.textContent.toLowerCase().includes('tampilkan'));
-                            if(btn) btn.click();
-                        ''')
+                        select_belm.parent('tag:form').submit()
                     page.wait.load_start(timeout=5)
         except Exception as ex:
             logger.warning(f"Boutique Auto-Select skipped: {ex}")
@@ -205,7 +205,7 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
         try:
             splash_close = page.ele('text:Tutup', timeout=1) or page.ele('css:.close', timeout=1)
             if splash_close and splash_close.is_displayed():
-                splash_close.click(by_js=True)
+                splash_close.click() # Native click
                 time.sleep(1)
         except:
             pass
@@ -231,18 +231,20 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
         
         sync_broadcast(f"[Node {node_id}] [{nama}] 🚀 Submitting login credentials...")
         
-        # We must specifically submit the CORRECT form containing the password field natively via JS
-        page.run_js('''
-            let forms = document.querySelectorAll('form');
-            for(let f of forms) {
-                if(f.innerHTML.includes('password') || f.innerHTML.includes('email')) {
-                    let btn = f.querySelector('button[type="submit"], input[type="submit"], button.btn-primary, button.btn-login');
-                    if(btn) btn.click();
-                    else f.submit();
-                    break;
-                }
-            }
-        ''')
+        # NATIVE TRUSTED CLICK: Turnstile requires a real browser event, not a JS generated synthetic event
+        try:
+            login_form = pass_inp.parent('tag:form')
+            if login_form:
+                submit_btn = login_form.ele('tag:button', timeout=1) or login_form.ele('css:input[type="submit"]')
+                if submit_btn:
+                    submit_btn.click() # Real human click!
+                else:
+                    login_form.submit()
+            else:
+                pass_inp.submit()
+        except Exception as e:
+            logger.warning(f"Native trusted form submit failed: {e}")
+            pass_inp.submit()
         
         # Wait for redirect to antrean home
         page.wait.load_start(timeout=5)
@@ -288,7 +290,7 @@ def submit_booking(page: ChromiumPage, profile_data: Dict[str, str], location_id
                         time.sleep(1)
                         submit_btn = page.ele('text:Tampilkan Butik', timeout=1) or page.ele('css:button[type="submit"]')
                         if submit_btn:
-                            submit_btn.click(by_js=True)
+                            submit_btn.click() # Native trusted click
                         page.wait.load_start(timeout=5)
             except Exception:
                 pass
@@ -333,19 +335,12 @@ def submit_booking(page: ChromiumPage, profile_data: Dict[str, str], location_id
 
         logger.info("[SNIPER] Submitting form ...")
         
-        # Click submit natively to trigger JS event listeners (important for tokens)
+        # Click submit natively to trigger JS event listeners (trusted event)
         final_btn = page.ele('text:Lanjut', timeout=1) or page.ele('text:Submit', timeout=1) or page.ele('css:button[type="submit"]')
         if final_btn:
-            final_btn.click(by_js=True)
+            final_btn.click() # Native trusted
         else:
-            page.run_js('''
-                const form = document.querySelector('form');
-                if(form) {
-                    let btn = form.querySelector('button');
-                    if(btn) btn.click();
-                    else form.submit();
-                }
-            ''')
+            page.ele('css:form').submit()
         
         # Wait for the next page to load after form submission
         page.wait.load_start(timeout=5) 
