@@ -63,6 +63,17 @@ def check_quota(page: ChromiumPage, location_id: str, target_date: str) -> int:
         except Exception:
             pass # Timeout is normal if Cloudflare delays loading; we let post-checks handle it
             
+        # --- SPLASH SCREEN AUTO-LOGIN BUSTER ---
+        # Antam often shows an interstitial Terms & Conditions modal with a blue "Log In" button
+        try:
+            splash_btn = page.ele('text:Log In', timeout=2) or page.ele('text:Login', timeout=1) or page.ele('text:Masuk', timeout=1)
+            if splash_btn and splash_btn.is_displayed:
+                logger.info("Splash screen detected! Clicking 'Log In' to force redirect to /masuk...")
+                splash_btn.click()
+                page.wait.load_start(timeout=5)
+        except Exception:
+            pass
+
         # Post-navigation check
         if "/masuk" in page.url or "/login" in page.url:
             return -1
@@ -226,6 +237,15 @@ def submit_booking(page: ChromiumPage, profile_data: Dict[str, str], location_id
         if not page.ele('select#wakda', timeout=1):
             try:
                 page.get(url, retry=0, timeout=15)
+            except Exception:
+                pass
+                
+            # --- SPLASH SCREEN BUSTER ---
+            try:
+                splash_btn = page.ele('text:Log In', timeout=2) or page.ele('text:Login', timeout=1) or page.ele('text:Masuk', timeout=1)
+                if splash_btn and splash_btn.is_displayed:
+                    splash_btn.click()
+                    page.wait.load_start(timeout=5)
             except Exception:
                 pass
                 
