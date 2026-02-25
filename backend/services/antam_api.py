@@ -67,7 +67,32 @@ def check_quota(page: ChromiumPage, location_id: str, target_date: str) -> int:
         if "/masuk" in page.url or "/login" in page.url:
             return -1
             
-        # Wait for the select box
+        # BOUTIQUE AUTO-SELECTION BUSTER
+        # The URL /antrean sometimes intercepts us with a location selection form.
+        try:
+            if not page.ele('select#wakda', timeout=2):
+                loc_opt = page.ele(f'tag:option@@value={location_id}', timeout=1)
+                if loc_opt:
+                    logger.info(f"Boutique selection page detected. Forcing selection of {location_id}...")
+                    parent = loc_opt.parent('tag:select')
+                    if parent:
+                        parent.select(location_id)
+                        time.sleep(1)
+                    page.run_js('''
+                        let form = document.querySelector('form');
+                        if (form) {
+                            form.submit();
+                        } else {
+                            let btns = Array.from(document.querySelectorAll('button, input[type="submit"], input[type="button"]'));
+                            let submitBtn = btns.find(b => b.textContent.toLowerCase().includes('lanjut') || b.textContent.toLowerCase().includes('pilih') || (b.value && b.value.toLowerCase().includes('lanjut')));
+                            if(submitBtn) submitBtn.click();
+                        }
+                    ''')
+                    page.wait.load_start(timeout=5)
+        except Exception as ex:
+            logger.warning(f"Boutique Auto-Select skipped: {ex}")
+            
+        # Wait for the select box (wakda / quota options)
         if not page.wait.ele_loaded('select#wakda', timeout=15):
             if "/masuk" in page.url or "/login" in page.url:
                  return -1
@@ -197,11 +222,33 @@ def submit_booking(page: ChromiumPage, profile_data: Dict[str, str], location_id
     logger.info(f"[SNIPER] Starting sequence for {profile_data.get('nama_lengkap', 'Unknown')} at {location_id}")
     
     try:
-        # 1. Navigate
-        try:
-            page.get(url, retry=0, timeout=15)
-        except Exception:
-            pass
+        # 1. Fast Sniper: Skip reload if we are already sitting on the quota page from check_quota!
+        if not page.ele('select#wakda', timeout=1):
+            try:
+                page.get(url, retry=0, timeout=15)
+            except Exception:
+                pass
+                
+            # Boutique selection auto-bypass for Sniper (in case we did reload)
+            try:
+                if not page.ele('select#wakda', timeout=2):
+                    loc_opt = page.ele(f'tag:option@@value={location_id}', timeout=1)
+                    if loc_opt:
+                        parent = loc_opt.parent('tag:select')
+                        if parent: parent.select(location_id)
+                        time.sleep(1)
+                        page.run_js('''
+                            let form = document.querySelector('form');
+                            if(form) form.submit();
+                            else {
+                                let btns = Array.from(document.querySelectorAll('button'));
+                                let submitBtn = btns.find(b => b.textContent.toLowerCase().includes('lanjut'));
+                                if(submitBtn) submitBtn.click();
+                            }
+                        ''')
+                        page.wait.load_start(timeout=5)
+            except Exception:
+                pass
             
         if not page.wait.ele_loaded('select#wakda', timeout=20):
              return {"success": False, "error": "Select dropdown never loaded during sniper execution."}
