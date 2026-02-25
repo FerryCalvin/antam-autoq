@@ -37,104 +37,31 @@ class BotManager:
     async def _bot_loop(self, node_id: int, config: Dict[str, Any]):
         """The core logic that runs isolated in the background per Node."""
         
-        target_location = config['target_location']
-        target_date = config['target_date']
-        proxy = config.get('proxy')
-        nama_lengkap = config['nama_lengkap']
-        nik = config['nik']
+        # We need a bridge to broadcast messages from the synchronous DrissionPage thread
+        # back to the async FastAPI websocket manager.
+        loop = asyncio.get_running_loop()
+        def sync_broadcast(message: str):
+            # Fire and forget the broadcast coroutine into the main event loop
+            asyncio.run_coroutine_threadsafe(self.ws_manager.broadcast(message), loop)
+            
+        sync_broadcast(f"[Node {node_id}] 🟢 Starting DrissionPage Engine for {config['nama_lengkap']}...")
 
-        from playwright.async_api import async_playwright
-        from backend.services.antam_api import _get_stealth_page
+        from backend.services.antam_api import run_drission_bot_loop
         
         try:
-            async with async_playwright() as p:
-                launch_args = {
-                    "channel": "chrome",
-                    "headless": False, 
-                    # Comprehensive Cloudflare Evasion Arguments
-                    "args": [
-                        "--disable-blink-features=AutomationControlled",
-                        "--disable-features=IsolateOrigins,site-per-process",
-                        "--disable-site-isolation-trials",
-                        "--no-sandbox",
-                        "--disable-setuid-sandbox",
-                        "--disable-web-security",
-                        "--start-maximized",
-                        "--disable-dev-shm-usage",
-                        "--disable-accelerated-2d-canvas",
-                        "--disable-gpu"
-                    ],
-                    "ignore_default_args": ["--enable-automation"]
-                }
-                if proxy:
-                    launch_args["proxy"] = {"server": proxy}
-                    
-                browser = await p.chromium.launch(**launch_args)
-                context = await browser.new_context(
-                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                )
-                page = await _get_stealth_page(context)
-                
-                try:
-                    while True:
-                        await self.ws_manager.broadcast(f"[Node {node_id}] [{nama_lengkap}] ⏳ Checking quota for {target_location} (Proxy: {proxy or 'None'})")
-                        
-                        quota = await check_quota(page, target_location, target_date)
-                        
-                        if quota > 0:
-                            await self.ws_manager.broadcast(f"[Node {node_id}] [{nama_lengkap}] 🟢 SUCCESS: Found {quota} slots! Triggering Sniper...")
-                            # Trigger submit_booking
-                            config_payload = {
-                                "nama_lengkap": config['nama_lengkap'],
-                                "nik": config['nik'],
-                                "no_hp": config['no_hp'],
-                                "email": config['email']
-                            }
-                            res = await submit_booking(page, config_payload, target_location, target_date)
-                            
-                            if res.get("success"):
-                               await self.ws_manager.broadcast(f"[Node {node_id}] [{nama_lengkap}] 🏆 BOOKING SUCCESSFUL! URL: {res.get('url')}")
-                               
-                               # --- KILL SWITCH ---
-                               # Stop all other running nodes that use the same NIK
-                               kill_targets = []
-                               for other_id, node_data in self.nodes.items():
-                                   if other_id != node_id and node_data['config'].get('nik') == nik:
-                                       kill_targets.append(other_id)
-                                       
-                               for t_id in kill_targets:
-                                   self.nodes[t_id]["task"].cancel()
-                                   del self.nodes[t_id]
-                                   await self.ws_manager.broadcast(f"[System] 🛑 KILL SWITCH ACTIVATED: Node {t_id} stopped because NIK {nik} already secured a booking.")
-
-                            else:
-                               await self.ws_manager.broadcast(f"[Node {node_id}] [{nama_lengkap}] 🔴 SNIPER FAILED: {res.get('error')}")
-                               
-                            break # Stop looping after sniper execution
-                        elif quota == -1:
-                            await self.ws_manager.broadcast(f"[Node {node_id}] [{nama_lengkap}] 🟡 HARAP LOGIN DAHULU! Jendela Browser butuh aksi manual Anda.")
-                            await asyncio.sleep(5) # Slow down loop to let user login
-                        elif quota == -2:
-                            await self.ws_manager.broadcast(f"[Node {node_id}] [{nama_lengkap}] 🛡️ Cloudflare aktif. Membaca halaman... Silakan centang manual jika diminta di Chrome.")
-                            await asyncio.sleep(5) # Wait for user to verify, then check again
-                        else:
-                            await self.ws_manager.broadcast(f"[Node {node_id}] [{nama_lengkap}] 🔴 Quota full. Retrying in 10s...")
-                            await asyncio.sleep(10)
-                finally:
-                    try:
-                        await context.close()
-                        await browser.close()
-                    except Exception:
-                        pass
-                    
+            # Run the synchronous DrissionPage loop in a separate thread so it doesn't block FastAPI
+            await asyncio.to_thread(
+                run_drission_bot_loop, 
+                node_id, 
+                config, 
+                sync_broadcast,
+                self.nodes, # Pass nodes ref so it can trigger the Kill Switch
+                nik=config['nik']
+            )
         except asyncio.CancelledError:
             pass # Task was stopped normally
         except Exception as e:
-            # Silence TargetClosedError which happens normally on shutdown
             if "TargetClosedError" not in str(type(e)):
-                try:
-                    await self.ws_manager.broadcast(f"[Node {node_id}] 🔴 Critical Error: {str(e)}")
-                except:
-                    pass
+                sync_broadcast(f"[Node {node_id}] 🔴 Critical Error: {str(e)}")
             if node_id in self.nodes:
                 del self.nodes[node_id]
