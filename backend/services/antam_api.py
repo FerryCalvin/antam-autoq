@@ -181,34 +181,53 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
         if "masuk" not in page.url and "login" not in page.url:
             page.get("https://antrean.logammulia.com/login", retry=0, timeout=15)
             
-        page.wait.ele_loaded('@name=email', timeout=10)
+        # ⏳ Wait up to 60 seconds for Cloudflare / Splash Screens to be solved by the user or the bot
+        sync_broadcast(f"[Node {node_id}] [{nama}] 🛡️ Waiting up to 60s for Cloudflare/Splash Form to appear...")
+        if not page.wait.ele_loaded('@name=email', timeout=60):
+            sync_broadcast(f"[Node {node_id}] [{nama}] ❌ Timeout! Cloudflare took too long or form not found. Restarting loop...")
+            return False
+            
+        # Try to close any overlaying Splash Screen if one appears on the Login page
+        try:
+            splash_close = page.ele('text:Tutup', timeout=1) or page.ele('css:.close', timeout=1)
+            if splash_close and splash_close.is_displayed:
+                splash_close.click(by_js=True)
+                time.sleep(1)
+        except:
+            pass
         
         email_inp = page.ele('@name=email')
         pass_inp = page.ele('@name=password')
         
-        if email_inp: email_inp.input(email)
-        if pass_inp: pass_inp.input(password)
+        if email_inp: 
+            email_inp.clear()
+            email_inp.input(email)
+        if pass_inp: 
+            pass_inp.clear()
+            pass_inp.input(password)
         
         # Check and solve captcha
         solve_generic_math_captcha(page, logger, sync_broadcast, node_id)
         
         sync_broadcast(f"[Node {node_id}] [{nama}] 🚀 Submitting login credentials...")
-        # Use native DrissionPage submit for forms if available, otherwise strict CSS search
+        
+        # We must specifically submit the LOGIN form, not the CF form
         try:
-            form = page.ele('css:form', timeout=2)
-            if form:
-                form.submit()
+            # First look for the login button
+            submit_btn = page.ele('text:Masuk', timeout=1) or page.ele('text:Login', timeout=1) or page.ele('css:button[type="submit"]')
+            if submit_btn:
+                submit_btn.click(by_js=True) # JS click bypasses overlays
             else:
-                submit_btn = page.ele('css:button[type="submit"]') or page.ele('css:input[type="submit"]')
-                if submit_btn: submit_btn.click()
+                email_inp.submit()
         except Exception as e:
-            logger.warning(f"Could not click submit normally: {e}. Falling back to JS.")
+            logger.warning(f"Could not click submit normally: {e}. Falling back to JS form submit.")
             page.run_js('''
-                let form = document.querySelector('form');
-                if(form) form.submit();
-                else {
-                    let btn = document.querySelector('button[type="submit"]') || document.querySelector('input[type="submit"]');
-                    if(btn) btn.click();
+                let forms = document.querySelectorAll('form');
+                for(let f of forms) {
+                    if(f.innerHTML.includes('password') || f.innerHTML.includes('email')) {
+                        f.submit();
+                        break;
+                    }
                 }
             ''')
         
@@ -221,7 +240,7 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
             sync_broadcast(f"[Node {node_id}] [{nama}] ✅ Auto-Login Successful! Returning to Quota Target...")
             return True
         else:
-            sync_broadcast(f"[Node {node_id}] [{nama}] ❌ Auto-Login Failed. Still on login page. Retrying next loop.")
+            sync_broadcast(f"[Node {node_id}] [{nama}] ❌ Login Failed. Retrying...")
             return False
             
     except Exception as e:
