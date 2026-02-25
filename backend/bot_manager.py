@@ -103,12 +103,20 @@ class BotManager:
                             
                         await asyncio.sleep(10)
                 finally:
-                    await context.close()
-                    await browser.close()
+                    try:
+                        await context.close()
+                        await browser.close()
+                    except Exception:
+                        pass
                     
         except asyncio.CancelledError:
             pass # Task was stopped normally
         except Exception as e:
-            await self.ws_manager.broadcast(f"[Node {node_id}] 🔴 Critical Error: {str(e)}")
+            # Silence TargetClosedError which happens normally on shutdown
+            if "TargetClosedError" not in str(type(e)):
+                try:
+                    await self.ws_manager.broadcast(f"[Node {node_id}] 🔴 Critical Error: {str(e)}")
+                except:
+                    pass
             if node_id in self.nodes:
                 del self.nodes[node_id]

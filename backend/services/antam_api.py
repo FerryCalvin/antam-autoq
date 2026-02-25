@@ -76,7 +76,8 @@ async def check_quota(page, location_id: str, target_date: str) -> int:
             return 0
             
     except Exception as e:
-        logger.error(f"Error checking quota via Playwright: {e}")
+        if "TargetClosedError" not in str(type(e)) and "CancelledError" not in str(type(e)):
+            logger.error(f"Error checking quota via Playwright: {e}")
         return 0
 
 
@@ -247,5 +248,6 @@ async def submit_booking(page, profile_data: Dict[str, str], location_id: str, t
         }
             
     except Exception as e:
-        logger.error(f"[SNIPER] Error during sniper execution: {e}")
+        if "TargetClosedError" not in str(type(e)) and "CancelledError" not in str(type(e)):
+            logger.error(f"[SNIPER] Error during sniper execution: {e}")
         return {"success": False, "error": str(e)}
