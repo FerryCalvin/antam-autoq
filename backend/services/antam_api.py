@@ -181,11 +181,17 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
         if "login" not in page.url:
             page.get("https://antrean.logammulia.com/login", retry=0, timeout=15)
             
-        # ⏳ Wait up to 60 seconds for the email input to appear in the DOM
+        # ⏳ Wait up to 60 seconds for the password input to appear in the DOM
         sync_broadcast(f"[Node {node_id}] [{nama}] 🛡️ Waiting up to 60s for Cloudflare/Splash Form to appear...")
-        email_inp = page.ele('@name=email', timeout=60)
-        if not email_inp:
+        pass_inp = page.ele('css:input[type="password"]', timeout=60)
+        
+        if not pass_inp:
             sync_broadcast(f"[Node {node_id}] [{nama}] ❌ Timeout! Cloudflare took too long or form not found. Restarting loop...")
+            try:
+                found_inputs = [f"{e.attr('name')} ({e.attr('type')})" for e in page.eles('tag:input')]
+                sync_broadcast(f"[Node {node_id}] [{nama}] 🔍 DIAGNOSTIC Inputs: {', '.join(found_inputs)} | URL: {page.url}")
+            except:
+                pass
             return False
             
         # Try to close any overlaying Splash Screen if one appears on the Login page
@@ -197,11 +203,12 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
         except:
             pass
         
-        pass_inp = page.ele('@name=password')
+        email_inp = page.ele('@name=email') or page.ele('css:input[type="email"]') or page.ele('@name=username')
         
         if email_inp: 
             email_inp.clear()
             email_inp.input(email)
+            
         if pass_inp: 
             pass_inp.clear()
             pass_inp.input(password)
