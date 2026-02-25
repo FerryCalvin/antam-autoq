@@ -50,13 +50,11 @@ def check_quota(page: ChromiumPage, location_id: str, target_date: str) -> int:
         except Exception:
             pass # Timeout is normal if Cloudflare delays loading; we let post-checks handle it
             
-        # --- SPLASH SCREEN AUTO-LOGIN BUSTER ---
-        # Instead of trying to click the tricky modal button, we just intercept it and
-        # return -1. This forces the Bot Manager to trigger auto_login() which will
-        # directly navigate to /masuk for us securely.
+        # --- SPLASH SCREEN BUSTER ---
+        # If we see the Splash Screen, it means we are purely guests and need to login!
         try:
-            if page.ele('text:Log In', timeout=2) or page.ele('text:Register', timeout=1) or page.ele('text:Masuk', timeout=1):
-                logger.info("Splash screen detected! Aborting tracker to execute direct /masuk auto-login...")
+            if page.ele('text:Log In', timeout=1) or page.ele('text:Login', timeout=1) or page.ele('text:Masuk', timeout=1):
+                logger.info("Splash screen detected! We are logged out. Forcing Auto-Login...")
                 return -1
         except Exception:
             pass
@@ -190,22 +188,32 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
         solve_generic_math_captcha(page, logger, sync_broadcast, node_id)
         
         sync_broadcast(f"[Node {node_id}] [{nama}] 🚀 Submitting login credentials...")
-        page.run_js('''
-            let form = document.querySelector('form');
-            if(form) form.submit();
-            else {
-                let btns = Array.from(document.querySelectorAll('button'));
-                let submitBtn = btns.find(b => b.textContent.toLowerCase().includes('masuk') || b.textContent.toLowerCase().includes('login'));
-                if(submitBtn) submitBtn.click();
-            }
-        ''')
+        # Use native DrissionPage submit for forms if available, otherwise strict CSS search
+        try:
+            form = page.ele('css:form', timeout=2)
+            if form:
+                form.submit()
+            else:
+                submit_btn = page.ele('css:button[type="submit"]') or page.ele('css:input[type="submit"]')
+                if submit_btn: submit_btn.click()
+        except Exception as e:
+            logger.warning(f"Could not click submit normally: {e}. Falling back to JS.")
+            page.run_js('''
+                let form = document.querySelector('form');
+                if(form) form.submit();
+                else {
+                    let btn = document.querySelector('button[type="submit"]') || document.querySelector('input[type="submit"]');
+                    if(btn) btn.click();
+                }
+            ''')
         
         # Wait for redirect to antrean home
         page.wait.load_start(timeout=5)
-        time.sleep(3) # Let cookie sink into DrissionPage
+        time.sleep(4) # Let cookie sink into DrissionPage
         
+        # Only verify success if the URL completely escaped the login bounds
         if "masuk" not in page.url and "login" not in page.url:
-            sync_broadcast(f"[Node {node_id}] [{nama}] ✅ Auto-Login Successful!")
+            sync_broadcast(f"[Node {node_id}] [{nama}] ✅ Auto-Login Successful! Returning to Quota Target...")
             return True
         else:
             sync_broadcast(f"[Node {node_id}] [{nama}] ❌ Auto-Login Failed. Still on login page. Retrying next loop.")
