@@ -48,39 +48,39 @@ async def check_quota(page, location_id: str, target_date: str) -> int:
     logger.info(f"Navigating to {url} to check slots...")
 
     try:
-        # Pre-navigation check: Avoid reloading if user is currently solving Cloudflare
+        # PRE-FLIGHT CHECK: Avoid reloading if the page is currently blocked
         if page.url != "about:blank":
-            html_content = await page.content()
-            if "cloudflare" in html_content.lower() or "challenge" in html_content.lower() or "verifying you are human" in html_content.lower() or "just a moment" in html_content.lower():
-                logger.warning("Cloudflare challenge in progress. Pausing reload sequence...")
+            # If it's currently on login, return -1 immediately
+            if "/masuk" in page.url or "/login" in page.url:
+                return -1
+                
+            # If the dropdown is MISSING, it means we are stuck on Cloudflare, 502, etc.
+            if await page.query_selector('select#wakda') is None:
                 try:
+                    # Give it 10 seconds to auto-resolve (e.g. user clicking or CF finishing)
                     await page.wait_for_selector('select#wakda', timeout=10000)
                 except Exception:
-                    return -2 # Special code for "Cloudflare Blocked"
+                    # Still missing after 10s, return -2 to UI so user checks it
+                    return -2
+
+        # If we reach here, either it's a fresh browser (about:blank),
+        # OR the dropdown WAS present (meaning we are safe to refresh),
+        # OR the dropdown just appeared after our wait.
+        # In all cases, we want to goto the target URL to refresh the slots!
+        await page.goto(url, timeout=30000)
         
-        # If we passed the check or it's a fresh page, navigate normally
-        if await page.query_selector('select#wakda') is None:
-            await page.goto(url, timeout=30000)
-        
-        # Check if we got redirected to the login page
+        # Post-navigation check
         if "/masuk" in page.url or "/login" in page.url:
-            logger.error("DILIHKAN KE HALAMAN LOGIN! Harap login secara manual terlebih dahulu di jendela Chrome ini.")
-            await asyncio.sleep(10) # Give user a moment to realize
-            return -1 # Special code for "Needs Login"
+            return -1
             
         # Wait for either the Cloudflare challenge to pass or the select box to appear
         try:
             await page.wait_for_selector('select#wakda', timeout=15000)
         except Exception:
-            logger.warning("Timeout waiting for 'select#wakda'. Cloudflare block or page structural change.")
-            # We can dump HTML for debugging
-            html_content = await page.content()
-            if "cloudflare" in html_content.lower() or "challenge" in html_content.lower() or "verifying you are human" in html_content.lower():
-                 logger.error("Cloudflare challenge detected and not passed.")
-                 return -2
-            elif "/masuk" in page.url or "/login" in page.url:
+            # Navigation finished but dropdown still missing. Back into Blocked state.
+            if "/masuk" in page.url or "/login" in page.url:
                  return -1
-            return 0
+            return -2
 
         # Page is loaded, let's parse the HTML using BeautifulSoup
         html_content = await page.content()
