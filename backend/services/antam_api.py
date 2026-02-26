@@ -55,14 +55,32 @@ def check_quota(page: ChromiumPage, location_id: str, target_date: str) -> int:
             logger.warning("IP Ban / Rate Limit Detected!")
             return -3
             
-        # --- SPLASH SCREEN BUSTER ---
-        # If we see the Splash Screen, it means we are purely guests and need to login!
+        # --- BOUTIQUE AUTO-SELECTION BUSTER ---
+        # The user might be dumped on the intermediate Boutique Selection page.
         try:
-            if page.ele('text:Log In', timeout=1) or page.ele('text:Login', timeout=1) or page.ele('text:Masuk', timeout=1):
-                logger.info("Splash screen detected! We are logged out. Forcing Auto-Login...")
-                return -1
-        except Exception:
-            pass
+            butik_select = page.ele('select[name="lokasi_id"]', timeout=1)
+            btn = page.ele('tag:button@@text():Tampilkan Butik', timeout=1)
+            if butik_select and btn and butik_select.is_displayed():
+                logger.info("Pre-flight: Selecting target BELM...")
+                butik_select.select.by_value(location_id)
+                
+                # Check if Cloudflare Turnstile is present
+                cf_input = page.ele('css:input[name="cf-turnstile-response"]')
+                if cf_input:
+                    logger.info("Waiting up to 15s for Cloudflare Turnstile token...")
+                    import time
+                    for _ in range(15):
+                        if cf_input.value:
+                            logger.info("Turnstile generated token! Auto-clicking Tampilkan Butik...")
+                            btn.click() # Native
+                            page.wait.load_start(timeout=5)
+                            break
+                        time.sleep(1)
+                else:
+                    btn.click() # Native
+                    page.wait.load_start(timeout=5)
+        except Exception as e:
+            logger.warning(f"Boutique auto-selection error: {e}")
 
         # Post-navigation check
         if "/masuk" in page.url or "/login" in page.url or "/home" in page.url:
@@ -130,16 +148,26 @@ def solve_generic_math_captcha(page: ChromiumPage, logger_obj=logger, sync_broad
             math_match = re.search(r'(\d+\s+(ditambah|dikurangi|dikali|dibagi)\s+\d+)', page_html)
             
             if math_match:
+                question = math_match.group(1)
                 answer = solve_math_question(question)
                 logger_obj.info(f"Solved Math: {question} = {answer}")
                 if sync_broadcast and node_id:
                     sync_broadcast(f"[Node {node_id}] 🧠 Solved Math: {question} = {answer}")
                 
-                # Inject answer into empty text/number fields (skipping email)
+                # Natively input if possible
+                try:
+                    for inp in page.eles('css:input[type="text"]'):
+                        if not inp.value and "email" not in str(inp.attr('name')):
+                            inp.input(str(answer))
+                            break
+                except:
+                    pass
+                
+                # Inject answer into empty text/number fields (skipping email) as fallback
                 page.run_js(f'''
                     let inputs = document.querySelectorAll('input[type="text"], input[type="number"]');
                     for(let inp of inputs) {{
-                        if(inp.value === "" && !inp.name.includes("email")) {{
+                        if(inp.value === "" && (!inp.name || !inp.name.includes("email"))) {{
                             inp.value = "{answer}";
                         }}
                     }}
