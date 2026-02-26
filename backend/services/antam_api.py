@@ -1,4 +1,5 @@
 import time
+import datetime
 import os
 import re
 import logging
@@ -541,8 +542,13 @@ def run_drission_bot_loop(node_id: int, config: Dict[str, Any], sync_broadcast, 
                 time.sleep(2)
                 page = _get_stealth_page(proxy, node_id)
             else:
-                sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🔴 Quota full. Retrying in 10s...")
-                time.sleep(10)
+                current_hour = datetime.datetime.now().hour
+                if current_hour < 7:
+                    sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🌙 Smart Idle: Antrean belum buka (Jam {current_hour}). Refresh setiap 5 menit...")
+                    time.sleep(300)
+                else:
+                    sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🔴 Quota full. Retrying in 10s...")
+                    time.sleep(10)
                 
     except Exception as e:
         sync_broadcast(f"[Node {node_id}] 🔴 Critical Thread Error: {str(e)}")
