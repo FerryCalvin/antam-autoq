@@ -166,6 +166,14 @@ def check_quota(page: ChromiumPage, location_id: str, target_date: str) -> int:
         if "/masuk" in page.url or "/login" in page.url or "/home" in page.url:
             return -1
             
+        # Post-login redirect trap check: the user might be dumped on the /users profile page
+        if "/users" in page.url:
+            logger.info("Redirected to /users profile page. Looking for 'Menu Antrean' button...")
+            menu_btn = page.ele('text:Menu Antrean', timeout=2)
+            if menu_btn and str(menu_btn.tag) != 'NoneElement':
+                menu_btn.click()
+                page.wait.load_start(timeout=5)
+            
         # Wait for the select box (wakda / quota options)
         if not page.wait.ele_displayed('select#wakda', timeout=15):
             if "/masuk" in page.url or "/login" in page.url or "/home" in page.url:
