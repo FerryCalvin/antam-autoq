@@ -65,13 +65,13 @@ def check_quota(page: ChromiumPage, location_id: str, target_date: str) -> int:
             pass
 
         # Post-navigation check
-        if "/masuk" in page.url or "/login" in page.url:
+        if "/masuk" in page.url or "/login" in page.url or "/home" in page.url:
             return -1
             
         # Wait for the select box (wakda / quota options)
         if not page.wait.ele_displayed('select#wakda', timeout=15):
-            if "/masuk" in page.url or "/login" in page.url:
-                 return -1
+            if "/masuk" in page.url or "/login" in page.url or "/home" in page.url:
+                return -1
             return -2
 
         # DrissionPage makes DOM extraction very easy
@@ -153,6 +153,16 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
     """Automates the login sequence if the bot gets redirected to /masuk."""
     sync_broadcast(f"[Node {node_id}] [{nama}] 🔑 Redirected to Login form. Starting Auto-Login...")
     try:
+        # Handle the /home redirect trap
+        if "/home" in page.url or page.url.rstrip('/') == "https://antrean.logammulia.com":
+            sync_broadcast(f"[Node {node_id}] [{nama}] 🏠 Bypassing Homepage/Announcement...")
+            login_btn = page.ele('text:Log In', timeout=2) or page.ele('text:Login', timeout=2) or page.ele('tag:a@@text():Log In', timeout=1)
+            if login_btn:
+                try: login_btn.click()
+                except: page.get("https://antrean.logammulia.com/login", retry=0, timeout=15)
+            else:
+                page.get("https://antrean.logammulia.com/login", retry=0, timeout=15)
+                
         # ⏳ Wait up to 60 seconds for the password input to appear in the DOM
         sync_broadcast(f"[Node {node_id}] [{nama}] 🛡️ Waiting up to 60s for Cloudflare/Splash Form to appear...")
         pass_inp = page.ele('css:input[type="password"]', timeout=60)
