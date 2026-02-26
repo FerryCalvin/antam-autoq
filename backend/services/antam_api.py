@@ -153,10 +153,10 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
     """Automates the login sequence if the bot gets redirected to /masuk."""
     sync_broadcast(f"[Node {node_id}] [{nama}] 🔑 Redirected to Login form. Starting Auto-Login...")
     try:
-        # Navigate strictly to the root domain login page if not already there
-        if page.url.rstrip('/') != "https://antrean.logammulia.com" and "login" not in page.url:
-            page.get("https://antrean.logammulia.com/", retry=0, timeout=15)
-            
+        # ⏳ Wait up to 60 seconds for the password input to appear in the DOM
+        sync_broadcast(f"[Node {node_id}] [{nama}] 🛡️ Waiting up to 60s for Cloudflare/Splash Form to appear...")
+        pass_inp = page.ele('css:input[type="password"]', timeout=60)
+        
         # Try to close any overlaying Splash Screen if one appears on the Login page
         try:
             splash_close = page.ele('text:Tutup', timeout=1) or page.ele('css:.close', timeout=1)
@@ -166,10 +166,6 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
         except:
             pass
             
-        # Second, wait up to 60 seconds for the password input to appear in the DOM
-        sync_broadcast(f"[Node {node_id}] [{nama}] 🛡️ Waiting up to 60s for Cloudflare/Splash Form to appear...")
-        pass_inp = page.ele('css:input[type="password"]', timeout=60)
-        
         if not pass_inp:
             sync_broadcast(f"[Node {node_id}] [{nama}] ❌ Timeout! Cloudflare took too long or form not found. Restarting loop...")
             try:
