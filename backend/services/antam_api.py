@@ -526,13 +526,12 @@ def run_drission_bot_loop(node_id: int, config: Dict[str, Any], sync_broadcast, 
             elif quota == -1:
                 # Trigger Auto-Login flow
                 auto_login(page, config['email'], config['password'], sync_broadcast, node_id, nama_lengkap)
-                time.sleep(3) # Briefly pause before loop restarts to check quota on target page
             elif quota == -2:
                 sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🛡️ Cloudflare aktif. Membaca halaman... Silakan centang manual jika diminta di Chrome.")
-                time.sleep(5)
             elif quota == -3:
                 sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] ⛔ PEMBLOKIRAN IP TERDETEKSI! Server Antam memblokir akses sementara karena terlalu banyak request. Bot akan beristirahat selama 3 menit sebelum mencoba lagi...")
                 time.sleep(180) # 3-minute cooldown
+                continue
             elif quota == -4:
                 sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] ⚠️ Browser connection lost! Requesting a fresh browser instance...")
                 try:
@@ -541,13 +540,23 @@ def run_drission_bot_loop(node_id: int, config: Dict[str, Any], sync_broadcast, 
                     pass
                 time.sleep(2)
                 page = _get_stealth_page(proxy, node_id)
+                continue
             else:
-                current_hour = datetime.datetime.now().hour
-                if current_hour < 7:
-                    sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🌙 Smart Idle: Antrean belum buka (Jam {current_hour}). Refresh setiap 5 menit...")
-                    time.sleep(300)
+                sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🔴 Quota full.")
+                
+            # Smart Idle check applied to non-critical loops (quota 0, -1, -2)
+            current_hour = datetime.datetime.now().hour
+            if current_hour < 7:
+                sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🌙 Smart Idle: Antrean belum buka (Jam {current_hour}). Refresh setiap 5 menit...")
+                time.sleep(300)
+            else:
+                # Normal operational hour delays
+                if quota == -1:
+                    time.sleep(3)
+                elif quota == -2:
+                    time.sleep(5)
                 else:
-                    sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🔴 Quota full. Retrying in 10s...")
+                    sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] Retrying in 10s...")
                     time.sleep(10)
                 
     except Exception as e:
