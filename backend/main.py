@@ -1,5 +1,6 @@
 import asyncio
 import sys
+import os
 
 # Fix for Playwright asyncio subprocess error on Windows
 if sys.version_info[0] == 3 and sys.platform.startswith('win'):
@@ -26,6 +27,12 @@ async def lifespan(app: FastAPI):
     # Startup
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        
+    # Reset all nodes to inactive status on server restart
+    from sqlalchemy import update
+    async with AsyncSessionLocal() as session:
+        await session.execute(update(AccountNode).values(is_active=False, status_message="Ready"))
+        await session.commit()
     try:
         yield
     except asyncio.CancelledError:
@@ -134,6 +141,46 @@ async def api_stop_node(node_id: int, db: AsyncSession = Depends(get_db)):
     db_node.status_message = "Ready"
     await db.commit()
     return {"message": "Stopped", "is_active": False, "status": "Ready"}
+
+# --- TICKET SCREENSHOT ENDPOINTS ---
+import glob
+from fastapi.responses import FileResponse
+
+@app.get("/api/tickets")
+async def list_tickets():
+    """List all saved ticket screenshots, sorted newest first."""
+    ticket_dir = os.path.join(os.getcwd(), "tickets")
+    if not os.path.isdir(ticket_dir):
+        return []
+    
+    tickets = []
+    for filepath in glob.glob(os.path.join(ticket_dir, "TICKET_*.png")):
+        filename = os.path.basename(filepath)
+        stat = os.stat(filepath)
+        tickets.append({
+            "filename": filename,
+            "size": stat.st_size,
+            "created": stat.st_ctime,
+        })
+    
+    # Sort newest first
+    tickets.sort(key=lambda t: t["created"], reverse=True)
+    return tickets
+
+@app.get("/api/tickets/{filename}")
+async def download_ticket(filename: str):
+    """Download a specific ticket screenshot."""
+    ticket_dir = os.path.join(os.getcwd(), "tickets")
+    filepath = os.path.join(ticket_dir, filename)
+    
+    # Security: prevent directory traversal
+    if ".." in filename or "/" in filename or "\\" in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    
+    if not os.path.isfile(filepath):
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    
+    return FileResponse(filepath, media_type="image/png", filename=filename)
 
 # --- WEBSOCKET ENDPOINT ---
 @app.websocket("/ws")

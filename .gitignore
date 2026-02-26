@@ -14,8 +14,12 @@ __pycache__/
 
 # Python Logs
 *.log
-tickets/
-backend/antam_bot.db
+# SQLite DB
+*.db
+*.sqlite3
+
+# DrissionPage Browser Profiles
+chrome_profile_*
 
 # Node
 node_modules/

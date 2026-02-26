@@ -9,6 +9,33 @@ from DrissionPage.errors import ElementNotFoundError
 
 logger = logging.getLogger(__name__)
 
+# Mapping from internal bot codes (stored in DB) to Antam website's HTML <select> integer values
+# These were extracted from the live website's <select name="site"> element
+LOCATION_CODE_TO_SITE_ID = {
+    "JKT-06": "31",  # ATGM-Gedung Antam
+    "JKT-01": "30",  # ATGM-Graha Dipta
+    "BPN-01": "4",   # Butik Emas LM - Balikpapan
+    "BDG-01": "1",   # Butik Emas LM - Bandung
+    "BKS-01": "19",  # Butik Emas LM - Bekasi
+    "TGR-01": "16",  # Butik Emas LM - Bintaro
+    "BGR-01": "17",  # Butik Emas LM - Bogor
+    "DPS-01": "5",   # Butik Emas LM - Denpasar
+    "SDA-01": "20",  # Butik Emas LM - Djuanda
+    "JKT-04": "6",   # Butik Emas LM - Gedung Antam
+    "JKT-05": "3",   # Butik Emas LM - Graha Dipta
+    "MKS-01": "11",  # Butik Emas LM - Makassar
+    "MDN-01": "10",  # Butik Emas LM - Medan
+    "PLB-01": "12",  # Butik Emas LM - Palembang
+    "PKU-01": "24",  # Butik Emas LM - Pekanbaru
+    "JKT-07": "21",  # Butik Emas LM - Puri Indah
+    "SMR-01": "15",  # Butik Emas LM - Semarang
+    "TGR-02": "23",  # Butik Emas LM - Serpong
+    "JKT-08": "8",   # Butik Emas LM - Setiabudi One
+    "SUB-01": "13",  # Butik Emas LM - Surabaya 1 Darmo
+    "SUB-02": "14",  # Butik Emas LM - Surabaya 2 Pakuwon
+    "YOG-01": "9",   # Butik Emas LM - Yogyakarta
+}
+
 def _get_stealth_page(proxy: str = None, node_id: int = 1) -> ChromiumPage:
     """
     Initializes a DrissionPage ChromiumPage which inherently bypasses Cloudflare
@@ -23,8 +50,7 @@ def _get_stealth_page(proxy: str = None, node_id: int = 1) -> ChromiumPage:
     user_data_dir = os.path.join(os.getcwd(), f"chrome_profile_{node_id}")
     co.set_user_data_path(user_data_dir)
     
-    # Hide automation features and disable the infobars (unsupported command-line flag warning)
-    co.set_argument('--disable-blink-features=AutomationControlled')
+    # Hide automation features and disable the infobars
     co.set_argument('--disable-infobars')
     # DO NOT override user_agent! It breaks Sec-CH-UA sync causing Turnstile infinite loops!
     
@@ -40,7 +66,11 @@ def check_quota(page: ChromiumPage, location_id: str, target_date: str) -> int:
     Returns the integer quota available (or 1 if ANY slot is found), 0 if none.
     -1 means "Needs Login", -2 means "Cloudflare Active".
     """
-    url = f"https://antrean.logammulia.com/antrean?site={location_id}"
+    # Translate internal bot code to Antam's HTML integer site ID
+    site_id = LOCATION_CODE_TO_SITE_ID.get(location_id, location_id)
+    logger.info(f"Translating location '{location_id}' -> site_id '{site_id}'")
+    
+    url = f"https://antrean.logammulia.com/antrean?site={site_id}"
     logger.info(f"Navigating to {url} to check slots...")
 
     try:
@@ -58,26 +88,75 @@ def check_quota(page: ChromiumPage, location_id: str, target_date: str) -> int:
         # --- BOUTIQUE AUTO-SELECTION BUSTER ---
         # The user might be dumped on the intermediate Boutique Selection page.
         try:
-            butik_select = page.ele('select[name="lokasi_id"]', timeout=1)
-            btn = page.ele('tag:button@@text():Tampilkan Butik', timeout=1)
-            if butik_select and btn and butik_select.is_displayed():
-                logger.info("Pre-flight: Selecting target BELM...")
-                butik_select.select.by_value(location_id)
+            # Check if we are on the Boutique Selection page using JS (avoids NoneElement issues)
+            is_boutique_page = page.run_js(
+                'return !!(document.querySelector("select[name=site]") && '
+                'document.querySelector("button") && '
+                'document.body.innerText.includes("Tampilkan Butik"))'
+            )
+            if is_boutique_page:
+                logger.info(f"Pre-flight: Selecting target BELM site_id='{site_id}' via Vue-aware JS...")
                 
-                # Check if Cloudflare Turnstile is present
-                cf_input = page.ele('css:input[name="cf-turnstile-response"]')
-                if cf_input:
+                # Use the native HTMLSelectElement prototype setter to trigger Vue.js v-model reactivity.
+                # Vue 2 intercepts the native setter via Object.defineProperty, and Vue 3 via Proxy.
+                # Simply setting `.value` on the element directly does NOT trigger the setter.
+                # We must use the ORIGINAL native setter from the prototype chain.
+                page.run_js(f'''
+                    var sel = document.querySelector('select[name="site"]');
+                    if (sel) {{
+                        // Use the native setter from the HTMLSelectElement prototype
+                        var nativeSetter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set;
+                        nativeSetter.call(sel, '{site_id}');
+                        
+                        // Dispatch events that Vue.js v-model listens for
+                        sel.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                        sel.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                    }}
+                ''')
+                
+                time.sleep(1)  # Let Vue process the change
+                
+                # Verify the selection actually took effect
+                verify_js = 'var s=document.querySelector("select[name=site]"); return s ? s.value : "";'
+
+                current_val = page.run_js(verify_js)
+
+                logger.info(f"Dropdown value after JS injection: '{current_val}'")
+                
+                # Check if Cloudflare Turnstile is present and find the submit button
+                # We find the button here (AFTER confirming we're on the boutique page) to avoid NoneElement issues
+                submit_btn = page.ele('tag:button@@text():Tampilkan Butik', timeout=2)
+                cf_input = page.ele('css:input[name="cf-turnstile-response"]', timeout=1)
+                
+                if cf_input and hasattr(cf_input, 'attr'):
                     logger.info("Waiting up to 15s for Cloudflare Turnstile token...")
-                    import time
                     for _ in range(15):
-                        if cf_input.value:
+                        try:
+                            token_val = cf_input.attr('value') or cf_input.value
+                        except:
+                            token_val = None
+                        if token_val:
                             logger.info("Turnstile generated token! Auto-clicking Tampilkan Butik...")
-                            btn.click() # Native
+                            if submit_btn and hasattr(submit_btn, 'click'):
+                                submit_btn.click()  # Native isTrusted click
+                            else:
+                                page.run_js('document.querySelector("button[type=submit]").click()')
                             page.wait.load_start(timeout=5)
                             break
                         time.sleep(1)
+                    else:
+                        logger.warning("Turnstile token not generated in 15s, clicking anyway...")
+                        if submit_btn and hasattr(submit_btn, 'click'):
+                            submit_btn.click()
+                        else:
+                            page.run_js('document.querySelector("button[type=submit]").click()')
+                        page.wait.load_start(timeout=5)
                 else:
-                    btn.click() # Native
+                    logger.info("No Turnstile detected, clicking Tampilkan Butik directly...")
+                    if submit_btn and hasattr(submit_btn, 'click'):
+                        submit_btn.click()  # Native isTrusted click
+                    else:
+                        page.run_js('document.querySelector("button[type=submit]").click()')
                     page.wait.load_start(timeout=5)
         except Exception as e:
             logger.warning(f"Boutique auto-selection error: {e}")
@@ -114,6 +193,9 @@ def check_quota(page: ChromiumPage, location_id: str, target_date: str) -> int:
             
     except Exception as e:
         logger.error(f"Error checking quota via DrissionPage: {e}")
+        error_str = str(e).lower()
+        if "disconnected" in error_str or "targetclosed" in error_str:
+            return -4  # Signal the main loop that the browser crashed/disconnected
         return 0
 
 
@@ -450,6 +532,14 @@ def run_drission_bot_loop(node_id: int, config: Dict[str, Any], sync_broadcast, 
             elif quota == -3:
                 sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] ⛔ PEMBLOKIRAN IP TERDETEKSI! Server Antam memblokir akses sementara karena terlalu banyak request. Bot akan beristirahat selama 3 menit sebelum mencoba lagi...")
                 time.sleep(180) # 3-minute cooldown
+            elif quota == -4:
+                sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] ⚠️ Browser connection lost! Requesting a fresh browser instance...")
+                try:
+                    page.quit()
+                except:
+                    pass
+                time.sleep(2)
+                page = _get_stealth_page(proxy, node_id)
             else:
                 sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🔴 Quota full. Retrying in 10s...")
                 time.sleep(10)
