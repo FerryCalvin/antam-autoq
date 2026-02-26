@@ -68,37 +68,6 @@ def check_quota(page: ChromiumPage, location_id: str, target_date: str) -> int:
         if "/masuk" in page.url or "/login" in page.url:
             return -1
             
-        # BOUTIQUE AUTO-SELECTION BUSTER
-        # The URL /antrean sometimes intercepts us with a location selection form.
-        try:
-            if not page.ele('select#wakda', timeout=2):
-                select_belm = page.ele('tag:select', timeout=1)
-                if select_belm:
-                    logger.info(f"Boutique selection page detected. Forcing selection of {location_id}...")
-                    try:
-                        select_belm.select(location_id)
-                    except:
-                        # Fallback: find option containing the location_id string and select it
-                        for opt in select_belm.eles('tag:option'):
-                            if location_id.lower() in opt.text.lower() or location_id.lower() in str(opt.attr('value')).lower():
-                                select_belm.select(opt.attr('value'))
-                                break
-                                
-                    time.sleep(1)
-                    # Use native trusted click to satisfy Turnstile's IsTrusted event listener
-                    submit_btn = page.ele('text:Tampilkan Butik', timeout=1) or page.ele('css:button[type="submit"]')
-                    if submit_btn:
-                        try:
-                            submit_btn.click() # Native True Click
-                        except Exception as e:
-                            logger.warning(f"Native click failed for Tampilkan Butik, trying generic submit: {e}")
-                            select_belm.parent('tag:form').submit()
-                    else:
-                        select_belm.parent('tag:form').submit()
-                    page.wait.load_start(timeout=5)
-        except Exception as ex:
-            logger.warning(f"Boutique Auto-Select skipped: {ex}")
-            
         # Wait for the select box (wakda / quota options)
         if not page.wait.ele_displayed('select#wakda', timeout=15):
             if "/masuk" in page.url or "/login" in page.url:
@@ -188,7 +157,16 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
         if page.url.rstrip('/') != "https://antrean.logammulia.com" and "login" not in page.url:
             page.get("https://antrean.logammulia.com/", retry=0, timeout=15)
             
-        # ⏳ Wait up to 60 seconds for the password input to appear in the DOM
+        # Try to close any overlaying Splash Screen if one appears on the Login page
+        try:
+            splash_close = page.ele('text:Tutup', timeout=1) or page.ele('css:.close', timeout=1)
+            if splash_close and splash_close.is_displayed():
+                splash_close.click() # Native click
+                time.sleep(1)
+        except:
+            pass
+            
+        # Second, wait up to 60 seconds for the password input to appear in the DOM
         sync_broadcast(f"[Node {node_id}] [{nama}] 🛡️ Waiting up to 60s for Cloudflare/Splash Form to appear...")
         pass_inp = page.ele('css:input[type="password"]', timeout=60)
         
@@ -200,15 +178,6 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
             except:
                 pass
             return False
-            
-        # Try to close any overlaying Splash Screen if one appears on the Login page
-        try:
-            splash_close = page.ele('text:Tutup', timeout=1) or page.ele('css:.close', timeout=1)
-            if splash_close and splash_close.is_displayed():
-                splash_close.click() # Native click
-                time.sleep(1)
-        except:
-            pass
         
         email_inp = page.ele('@name=email') or page.ele('css:input[type="email"]') or page.ele('@name=username')
         
