@@ -347,6 +347,14 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
         # Only verify success if the password field is no longer on the screen
         if not page.ele('css:input[type="password"]', timeout=2):
             sync_broadcast(f"[Node {node_id}] [{nama}] ✅ Auto-Login Successful! Returning to Quota Target...")
+            
+            # If immediately dumped to the profile page, proactively redirect to the queue page
+            if "/users" in page.url:
+                menu_btn = page.ele('text:Menu Antrean', timeout=2)
+                if menu_btn and str(menu_btn.tag) != 'NoneElement':
+                    menu_btn.click()
+                    page.wait.load_start(timeout=5)
+            
             return True
         else:
             sync_broadcast(f"[Node {node_id}] [{nama}] ❌ Login Form still present (Wrong Password/Captcha?). Retrying...")
