@@ -38,3 +38,9 @@ dist/
 # OS Generated
 .DS_Store
 Thumbs.db
+
+# Test outputs
+*.png
+uc_profile/
+nodriver_profile/
+test_*.py
