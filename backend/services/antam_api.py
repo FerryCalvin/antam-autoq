@@ -268,7 +268,7 @@ def solve_generic_math_captcha(page: ChromiumPage, logger_obj=logger, sync_broad
         logger_obj.warning(f"Math Captcha Error: {ex}")
     return False
 
-from DrissionPage.common import Actions
+# Removed Actions import to prevent hardware mouse hijacking
 
 def solve_cloudflare_turnstile(page: ChromiumPage, logger_obj=logger, sync_broadcast=None, node_id=None):
     """Attempts to auto-click the Cloudflare Turnstile verification checkbox."""
@@ -300,35 +300,33 @@ def solve_cloudflare_turnstile(page: ChromiumPage, logger_obj=logger, sync_broad
                 cf_iframe = page # The main page itself contains it
 
         if cf_iframe and cb:
-            msg = "🤖 Menyuntikkan Kursor Manusia ke Cloudflare Turnstile..."
+            msg = "🤖 Memverifikasi Cloudflare Turnstile (Virtual Click)..."
             if sync_broadcast and node_id:
                 sync_broadcast(f"[Node {node_id}] {msg}")
             logger_obj.info(msg)
             
-            # Use hardware-level mouse actions to simulate human movement and click
-            # This completely bypasses JavaScript event listener defenses
+            # We use virtual coordinate clicks (click.at) instead of hardware Actions
+            # This allows unlimited bots to run in the background without stealing the user's mouse
             try:
-                ac = Actions(page)
-                
-                # Cloudflare check boxes are usually located a bit to the left of the center of the iframe
-                # We move the mouse to the element/iframe bounding box, wait a human-like delay, and click
-                ac.move_to(cb) 
-                time.sleep(0.5)
-                # Offset slightly to the left center where the box usually is visually over the label (e.g. -5px from center horizontally)
-                ac.move(offset_x=-5, offset_y=0)
-                time.sleep(0.3)
-                ac.click()
-                
-                time.sleep(3)
-                return True
-            except Exception as inner_e:
-                logger_obj.warning(f"Actions click failed: {inner_e}")
-                
-            # Fallback to the aggressive DOM click if actions fail
-            if cb.tag == 'body':
-                cb.click(by_js=True)
-            else:
+                # 1. Try a standard DrissionPage synthesized click (simulates Trusted Event)
                 cb.click()
+                time.sleep(1)
+            except Exception as e:
+                logger_obj.warning(f"Standard click failed: {e}")
+                
+            try:
+                # 2. Try an exact coordinate virtual click offset slightly from top-left
+                cb.click.at(offset_x=5, offset_y=5)
+                time.sleep(1)
+            except Exception as e:
+                pass
+                
+            try:
+                # 3. Fallback to Javascript force click
+                cb.click(by_js=True)
+            except:
+                pass
+                
             time.sleep(3)
             return True
             
