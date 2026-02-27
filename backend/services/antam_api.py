@@ -9,6 +9,19 @@ from typing import Dict, Any
 from DrissionPage import ChromiumPage, ChromiumOptions
 from DrissionPage.errors import ElementNotFoundError
 
+# CRITICAL: Fix Windows DPI Awareness BEFORE importing pyautogui
+# Without this, PyAutoGUI silently fails on 125%+ DPI scaling monitors
+import sys
+if sys.platform == 'win32':
+    try:
+        import ctypes
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except:
+            pass
+
 try:
     import pyautogui
     pyautogui.FAILSAFE = False  # Prevent abort if mouse hits corner
@@ -300,23 +313,18 @@ def solve_generic_math_captcha(page: ChromiumPage, logger_obj=logger, sync_broad
 # ============================================================================
 # FIXED-COORDINATE CLOUDFLARE CLICKER (User's Brilliant Idea!)
 # The Turnstile checkbox on Antam's CF page is ALWAYS at the same position.
-# We fix the Chrome window to a known position, then click the exact pixel.
+# We maximize Chrome to fullscreen, then click the exact pixel.
 # ============================================================================
 
-# These constants define where the Chrome window will be placed on screen
-# and where the Turnstile checkbox lives relative to that window.
-CHROME_WINDOW_X = 50       # Fixed window left edge
-CHROME_WINDOW_Y = 50       # Fixed window top edge
-CHROME_WINDOW_W = 1024     # Fixed window width
-CHROME_WINDOW_H = 768      # Fixed window height
-
-# The checkbox position is relative to the Chrome window's content area.
-# Based on the user's screenshot, the checkbox is at approximately:
-# ~233px from left edge of page, ~225px from top of page.
-# Chrome has a title bar (~80px) so absolute Y = WINDOW_Y + 80 + 225
-# We add a small offset to click the CENTER of the checkbox (not the edge)
-TURNSTILE_CHECKBOX_OFFSET_X = 240   # px from left edge of window
-TURNSTILE_CHECKBOX_OFFSET_Y = 305   # px from top edge of window (includes ~80px chrome UI)
+# For a MAXIMIZED Chrome window on 1920x1080 resolution with 125% DPI scaling:
+# User calibrated the checkbox position using a coordinate tool:
+#   Physical: X=425, Y=571  |  Scaled: X=340, Y=456
+#   DPI Scaling: 1.25 (120 dpi)
+# PyAutoGUI on Windows uses SCALED (logical) coordinates.
+#
+# ⚠️ CALIBRATION: If the click misses, adjust these values!
+TURNSTILE_CLICK_X = 425    # Physical screen X for the checkbox center
+TURNSTILE_CLICK_Y = 571    # Physical screen Y for the checkbox center
 
 
 def solve_cloudflare_click(page: ChromiumPage, logger_obj=logger, sync_broadcast=None, node_id=None) -> bool:
@@ -325,7 +333,7 @@ def solve_cloudflare_click(page: ChromiumPage, logger_obj=logger, sync_broadcast
     fixed pixel coordinate using PyAutoGUI.
     
     Strategy:
-    1. Move & resize the Chrome window to a fixed, predictable position.
+    1. MAXIMIZE the Chrome window (fullscreen) for consistent layout.
     2. Wait a moment for Cloudflare to render.
     3. Click the exact pixel location where the checkbox always appears.
     4. Wait for Cloudflare to process the click and redirect.
@@ -338,41 +346,43 @@ def solve_cloudflare_click(page: ChromiumPage, logger_obj=logger, sync_broadcast
         return False
 
     try:
-        msg = "🖱️ Memposisikan jendela Chrome ke koordinat tetap..."
+        msg = "🖱️ Memaksimalkan jendela Chrome ke fullscreen..."
         logger_obj.info(msg)
         if sync_broadcast and node_id:
             sync_broadcast(f"[Node {node_id}] {msg}")
 
-        # Step 1: Fix the Chrome window position using CDP
+        # Step 1: MAXIMIZE the Chrome window using CDP
         try:
-            # Get the window ID first
             window_info = page.run_cdp('Browser.getWindowForTarget')
             window_id = window_info.get('windowId')
             if window_id:
                 page.run_cdp('Browser.setWindowBounds', windowId=window_id, bounds={
-                    'left': CHROME_WINDOW_X,
-                    'top': CHROME_WINDOW_Y,
-                    'width': CHROME_WINDOW_W,
-                    'height': CHROME_WINDOW_H,
-                    'windowState': 'normal'
+                    'windowState': 'maximized'
                 })
-                logger_obj.info(f"Window positioned at ({CHROME_WINDOW_X},{CHROME_WINDOW_Y}) size {CHROME_WINDOW_W}x{CHROME_WINDOW_H}")
+                logger_obj.info("Chrome window maximized successfully")
         except Exception as e:
-            logger_obj.warning(f"CDP window positioning failed: {e}. Using pyautogui fallback.")
+            logger_obj.warning(f"CDP maximize failed: {e}. Trying pyautogui hotkey...")
+            # Fallback: use Win+Up to maximize
+            try:
+                import pyautogui
+                pyautogui.hotkey('win', 'up')
+                time.sleep(0.5)
+            except:
+                pass
 
         # Step 2: Wait for the Turnstile widget to fully render
         time.sleep(3)
 
-        # Step 3: Calculate and click the absolute screen coordinate
-        click_x = CHROME_WINDOW_X + TURNSTILE_CHECKBOX_OFFSET_X
-        click_y = CHROME_WINDOW_Y + TURNSTILE_CHECKBOX_OFFSET_Y
+        # Step 3: Click the absolute screen coordinate
+        click_x = TURNSTILE_CLICK_X
+        click_y = TURNSTILE_CLICK_Y
 
         msg = f"🎯 Menembak koordinat tetap ({click_x}, {click_y})..."
         logger_obj.info(msg)
         if sync_broadcast and node_id:
             sync_broadcast(f"[Node {node_id}] {msg}")
 
-        # Save the user's current mouse position so we can return it later
+        # Save the user's current mouse position
         original_x, original_y = pyautogui.position()
 
         # Move mouse smoothly (human-like) then click
