@@ -308,125 +308,114 @@ def solve_generic_math_captcha(page: ChromiumPage, logger_obj=logger, sync_broad
         logger_obj.warning(f"Math Captcha Error: {ex}")
     return False
 
-# Removed Actions import to prevent hardware mouse hijacking
-
 # ============================================================================
-# FIXED-COORDINATE CLOUDFLARE CLICKER (User's Brilliant Idea!)
-# The Turnstile checkbox on Antam's CF page is ALWAYS at the same position.
-# We maximize Chrome to fullscreen, then click the exact pixel.
+# CDP-BASED CLOUDFLARE TURNSTILE BYPASS (Based on cf-autoclick technique)
+# Uses Chrome DevTools Protocol Input.dispatchMouseEvent to generate
+# genuine isTrusted:true click events that Cloudflare's iframe accepts.
+# NO PyAutoGUI needed, NO physical mouse, WORKS with multiple bots!
 # ============================================================================
 
-# For a MAXIMIZED Chrome window on 1920x1080 resolution with 125% DPI scaling:
-# User calibrated the checkbox position using a coordinate tool:
-#   Physical: X=425, Y=571  |  Scaled: X=340, Y=456
-#   DPI Scaling: 1.25 (120 dpi)
-# PyAutoGUI on Windows uses SCALED (logical) coordinates.
-#
-# ⚠️ CALIBRATION: If the click misses, adjust these values!
-TURNSTILE_CLICK_X = 425    # Physical screen X for the checkbox center
-TURNSTILE_CLICK_Y = 571    # Physical screen Y for the checkbox center
-
-
-def solve_cloudflare_click(page: ChromiumPage, logger_obj=logger, sync_broadcast=None, node_id=None) -> bool:
+def solve_cloudflare_cdp(page: ChromiumPage, logger_obj=logger, sync_broadcast=None, node_id=None) -> bool:
     """
-    Bypass Cloudflare Turnstile by physically clicking the checkbox at a known
-    fixed pixel coordinate using PyAutoGUI.
+    Bypass Cloudflare Turnstile using CDP Input.dispatchMouseEvent.
     
-    Strategy:
-    1. MAXIMIZE the Chrome window (fullscreen) for consistent layout.
-    2. Wait a moment for Cloudflare to render.
-    3. Click the exact pixel location where the checkbox always appears.
-    4. Wait for Cloudflare to process the click and redirect.
+    Strategy (from cf-autoclick Chrome Extension):
+    1. Use DOM.getFlattenedDocument with pierce:true to find the Turnstile iframe.
+    2. Use DOM.getBoxModel to get its pixel coordinates.
+    3. Calculate checkbox position using empirical ratios.
+    4. Fire Input.dispatchMouseEvent (generates isTrusted:true click).
     """
-    if not PYAUTOGUI_AVAILABLE:
-        msg = "⚠️ PyAutoGUI tidak terinstall. Tidak bisa auto-klik Cloudflare."
+    try:
+        msg = "🔍 Mencari iframe Cloudflare Turnstile via CDP..."
+        logger_obj.info(msg)
+        if sync_broadcast and node_id:
+            sync_broadcast(f"[Node {node_id}] {msg}")
+
+        # Step 1: Enable DOM and find the Turnstile iframe
+        page.run_cdp('DOM.enable')
+        result = page.run_cdp('DOM.getFlattenedDocument', depth=-1, pierce=True)
+        nodes = result.get('nodes', [])
+
+        iframe_node = None
+        for node in nodes:
+            if node.get('nodeName') == 'IFRAME':
+                attrs = node.get('attributes', [])
+                for i in range(0, len(attrs), 2):
+                    if attrs[i] == 'src' and 'challenges.cloudflare.com' in attrs[i + 1]:
+                        iframe_node = node
+                        break
+                if iframe_node:
+                    break
+
+        if not iframe_node:
+            msg = "❌ Iframe Cloudflare Turnstile tidak ditemukan di DOM."
+            logger_obj.warning(msg)
+            if sync_broadcast and node_id:
+                sync_broadcast(f"[Node {node_id}] {msg}")
+            return False
+
+        logger_obj.info(f"✅ Turnstile iframe found (nodeId={iframe_node['nodeId']})")
+
+        # Step 2: Get iframe box model coordinates
+        box = page.run_cdp('DOM.getBoxModel', nodeId=iframe_node['nodeId'])
+        content = box['model']['content']
+        x_start, y_start = content[0], content[1]
+        x_end, y_end = content[4], content[5]
+        iframe_w = x_end - x_start
+        iframe_h = y_end - y_start
+
+        logger_obj.info(f"Iframe at ({x_start},{y_start}) size {iframe_w}x{iframe_h}")
+
+        # Step 3: Try multiple checkbox position ratios
+        # The checkbox is inside a Shadow DOM within the Turnstile iframe
+        ratios = [
+            (0.12, 0.52),  # Primary: center of checkbox square
+            (0.15, 0.50),  # Slightly right
+            (0.10, 0.50),  # Slightly left
+            (0.20, 0.50),  # Further right
+            (0.08, 0.50),  # Further left
+        ]
+
+        for idx, (x_r, y_r) in enumerate(ratios):
+            cx = x_start + (iframe_w * x_r)
+            cy = y_start + (iframe_h * y_r)
+
+            msg = f"🎯 CDP Click #{idx+1}: ({cx:.0f},{cy:.0f}) ratio=({x_r},{y_r})"
+            logger_obj.info(msg)
+            if sync_broadcast and node_id:
+                sync_broadcast(f"[Node {node_id}] {msg}")
+
+            # Fire CDP mouse events (generates isTrusted:true!)
+            page.run_cdp('Input.dispatchMouseEvent',
+                type='mouseMoved', x=cx, y=cy, button='none')
+            time.sleep(0.15)
+            page.run_cdp('Input.dispatchMouseEvent',
+                type='mousePressed', x=cx, y=cy, button='left', buttons=1, clickCount=1)
+            time.sleep(0.05)
+            page.run_cdp('Input.dispatchMouseEvent',
+                type='mouseReleased', x=cx, y=cy, button='left', buttons=0, clickCount=1)
+
+            time.sleep(5)
+
+            # Check if Cloudflare passed
+            html = page.html.lower() if page.html else ''
+            if 'just a moment' not in html and 'challenges.cloudflare.com' not in html:
+                msg = f"🎉 Cloudflare BERHASIL dilewati via CDP! (ratio {x_r},{y_r})"
+                logger_obj.info(msg)
+                if sync_broadcast and node_id:
+                    sync_broadcast(f"[Node {node_id}] {msg}")
+                return True
+
+        msg = "❌ Semua CDP click ratios gagal melewati Cloudflare."
         logger_obj.warning(msg)
         if sync_broadcast and node_id:
             sync_broadcast(f"[Node {node_id}] {msg}")
         return False
 
-    try:
-        msg = "🖱️ Memaksimalkan jendela Chrome ke fullscreen..."
-        logger_obj.info(msg)
-        if sync_broadcast and node_id:
-            sync_broadcast(f"[Node {node_id}] {msg}")
-
-        # Step 1: MAXIMIZE the Chrome window using CDP
-        try:
-            window_info = page.run_cdp('Browser.getWindowForTarget')
-            window_id = window_info.get('windowId')
-            if window_id:
-                page.run_cdp('Browser.setWindowBounds', windowId=window_id, bounds={
-                    'windowState': 'maximized'
-                })
-                logger_obj.info("Chrome window maximized successfully")
-        except Exception as e:
-            logger_obj.warning(f"CDP maximize failed: {e}. Trying pyautogui hotkey...")
-            # Fallback: use Win+Up to maximize
-            try:
-                import pyautogui
-                pyautogui.hotkey('win', 'up')
-                time.sleep(0.5)
-            except:
-                pass
-
-        # Step 2: Wait for the Turnstile widget to fully render
-        time.sleep(3)
-
-        # Step 3: Click the absolute screen coordinate
-        click_x = TURNSTILE_CLICK_X
-        click_y = TURNSTILE_CLICK_Y
-
-        msg = f"🎯 Menembak koordinat tetap ({click_x}, {click_y})..."
-        logger_obj.info(msg)
-        if sync_broadcast and node_id:
-            sync_broadcast(f"[Node {node_id}] {msg}")
-
-        # Save the user's current mouse position
-        original_x, original_y = pyautogui.position()
-
-        # Move mouse smoothly (human-like) then click
-        pyautogui.moveTo(click_x, click_y, duration=0.4)
-        time.sleep(0.3)
-        pyautogui.click()
-
-        msg = "✅ Klik terkirim! Menunggu Cloudflare memproses..."
-        logger_obj.info(msg)
-        if sync_broadcast and node_id:
-            sync_broadcast(f"[Node {node_id}] {msg}")
-
-        # Step 4: Wait for Cloudflare to verify and redirect
-        time.sleep(5)
-
-        # Return mouse to original position (so user isn't disrupted)
-        pyautogui.moveTo(original_x, original_y, duration=0.2)
-
-        # Step 5: Check if we passed
-        current_url = page.url
-        page_html = page.html.lower() if page.html else ''
-        
-        if 'challenges.cloudflare.com' not in page_html and 'just a moment' not in page_html:
-            msg = "🎉 Cloudflare berhasil dilewati dengan Fixed-Coordinate Click!"
-            logger_obj.info(msg)
-            if sync_broadcast and node_id:
-                sync_broadcast(f"[Node {node_id}] {msg}")
-            return True
-        else:
-            msg = "⚠️ Klik pertama tidak berhasil. Mencoba klik kedua..."
-            logger_obj.info(msg)
-            if sync_broadcast and node_id:
-                sync_broadcast(f"[Node {node_id}] {msg}")
-            # Try once more (sometimes CF needs a second click)
-            time.sleep(2)
-            pyautogui.moveTo(click_x, click_y, duration=0.3)
-            time.sleep(0.2)
-            pyautogui.click()
-            time.sleep(6)
-            pyautogui.moveTo(original_x, original_y, duration=0.2)
-            return True
-
     except Exception as e:
-        logger_obj.error(f"Fixed-Coordinate Click Error: {e}")
+        logger_obj.error(f"CDP Cloudflare Bypass Error: {e}")
+        if sync_broadcast and node_id:
+            sync_broadcast(f"[Node {node_id}] ❌ CDP Error: {e}")
         return False
 
 
@@ -838,14 +827,14 @@ def run_drission_bot_loop(node_id: int, config: Dict[str, Any], sync_broadcast, 
                 sync_broadcast(f"[Node {node_id}] {msg}")
                 logger.info(msg)
                 
-                # Strategy 1: Fixed-Coordinate Physical Click (FREE, no API needed)
-                click_success = solve_cloudflare_click(page, logger, sync_broadcast, node_id)
+                # Strategy 1: CDP Input.dispatchMouseEvent (FREE, no API, multi-bot capable!)
+                cdp_success = solve_cloudflare_cdp(page, logger, sync_broadcast, node_id)
                 
-                if not click_success:
+                if not cdp_success:
                     # Strategy 2: Fall back to 2Captcha API if user has a key
                     api_key = config.get('captcha_api_key')
                     if api_key:
-                        msg = "🔄 Klik fisik gagal. Mencoba 2Captcha API..."
+                        msg = "🔄 CDP bypass gagal. Mencoba 2Captcha API..."
                         sync_broadcast(f"[Node {node_id}] {msg}")
                         solve_cloudflare_api(page, logger, sync_broadcast, node_id, api_key=api_key)
             elif quota == -3:
