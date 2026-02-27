@@ -9,6 +9,14 @@ from typing import Dict, Any
 from DrissionPage import ChromiumPage, ChromiumOptions
 from DrissionPage.errors import ElementNotFoundError
 
+try:
+    import pyautogui
+    pyautogui.FAILSAFE = False  # Prevent abort if mouse hits corner
+    pyautogui.PAUSE = 0.3      # Small delay between actions for human-like behavior
+    PYAUTOGUI_AVAILABLE = True
+except ImportError:
+    PYAUTOGUI_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 # Mapping from internal bot codes (stored in DB) to Antam website's HTML <select> integer values
@@ -288,6 +296,128 @@ def solve_generic_math_captcha(page: ChromiumPage, logger_obj=logger, sync_broad
     return False
 
 # Removed Actions import to prevent hardware mouse hijacking
+
+# ============================================================================
+# FIXED-COORDINATE CLOUDFLARE CLICKER (User's Brilliant Idea!)
+# The Turnstile checkbox on Antam's CF page is ALWAYS at the same position.
+# We fix the Chrome window to a known position, then click the exact pixel.
+# ============================================================================
+
+# These constants define where the Chrome window will be placed on screen
+# and where the Turnstile checkbox lives relative to that window.
+CHROME_WINDOW_X = 50       # Fixed window left edge
+CHROME_WINDOW_Y = 50       # Fixed window top edge
+CHROME_WINDOW_W = 1024     # Fixed window width
+CHROME_WINDOW_H = 768      # Fixed window height
+
+# The checkbox position is relative to the Chrome window's content area.
+# Based on the user's screenshot, the checkbox is at approximately:
+# ~233px from left edge of page, ~225px from top of page.
+# Chrome has a title bar (~80px) so absolute Y = WINDOW_Y + 80 + 225
+# We add a small offset to click the CENTER of the checkbox (not the edge)
+TURNSTILE_CHECKBOX_OFFSET_X = 240   # px from left edge of window
+TURNSTILE_CHECKBOX_OFFSET_Y = 305   # px from top edge of window (includes ~80px chrome UI)
+
+
+def solve_cloudflare_click(page: ChromiumPage, logger_obj=logger, sync_broadcast=None, node_id=None) -> bool:
+    """
+    Bypass Cloudflare Turnstile by physically clicking the checkbox at a known
+    fixed pixel coordinate using PyAutoGUI.
+    
+    Strategy:
+    1. Move & resize the Chrome window to a fixed, predictable position.
+    2. Wait a moment for Cloudflare to render.
+    3. Click the exact pixel location where the checkbox always appears.
+    4. Wait for Cloudflare to process the click and redirect.
+    """
+    if not PYAUTOGUI_AVAILABLE:
+        msg = "⚠️ PyAutoGUI tidak terinstall. Tidak bisa auto-klik Cloudflare."
+        logger_obj.warning(msg)
+        if sync_broadcast and node_id:
+            sync_broadcast(f"[Node {node_id}] {msg}")
+        return False
+
+    try:
+        msg = "🖱️ Memposisikan jendela Chrome ke koordinat tetap..."
+        logger_obj.info(msg)
+        if sync_broadcast and node_id:
+            sync_broadcast(f"[Node {node_id}] {msg}")
+
+        # Step 1: Fix the Chrome window position using CDP
+        try:
+            # Get the window ID first
+            window_info = page.run_cdp('Browser.getWindowForTarget')
+            window_id = window_info.get('windowId')
+            if window_id:
+                page.run_cdp('Browser.setWindowBounds', windowId=window_id, bounds={
+                    'left': CHROME_WINDOW_X,
+                    'top': CHROME_WINDOW_Y,
+                    'width': CHROME_WINDOW_W,
+                    'height': CHROME_WINDOW_H,
+                    'windowState': 'normal'
+                })
+                logger_obj.info(f"Window positioned at ({CHROME_WINDOW_X},{CHROME_WINDOW_Y}) size {CHROME_WINDOW_W}x{CHROME_WINDOW_H}")
+        except Exception as e:
+            logger_obj.warning(f"CDP window positioning failed: {e}. Using pyautogui fallback.")
+
+        # Step 2: Wait for the Turnstile widget to fully render
+        time.sleep(3)
+
+        # Step 3: Calculate and click the absolute screen coordinate
+        click_x = CHROME_WINDOW_X + TURNSTILE_CHECKBOX_OFFSET_X
+        click_y = CHROME_WINDOW_Y + TURNSTILE_CHECKBOX_OFFSET_Y
+
+        msg = f"🎯 Menembak koordinat tetap ({click_x}, {click_y})..."
+        logger_obj.info(msg)
+        if sync_broadcast and node_id:
+            sync_broadcast(f"[Node {node_id}] {msg}")
+
+        # Save the user's current mouse position so we can return it later
+        original_x, original_y = pyautogui.position()
+
+        # Move mouse smoothly (human-like) then click
+        pyautogui.moveTo(click_x, click_y, duration=0.4)
+        time.sleep(0.3)
+        pyautogui.click()
+
+        msg = "✅ Klik terkirim! Menunggu Cloudflare memproses..."
+        logger_obj.info(msg)
+        if sync_broadcast and node_id:
+            sync_broadcast(f"[Node {node_id}] {msg}")
+
+        # Step 4: Wait for Cloudflare to verify and redirect
+        time.sleep(5)
+
+        # Return mouse to original position (so user isn't disrupted)
+        pyautogui.moveTo(original_x, original_y, duration=0.2)
+
+        # Step 5: Check if we passed
+        current_url = page.url
+        page_html = page.html.lower() if page.html else ''
+        
+        if 'challenges.cloudflare.com' not in page_html and 'just a moment' not in page_html:
+            msg = "🎉 Cloudflare berhasil dilewati dengan Fixed-Coordinate Click!"
+            logger_obj.info(msg)
+            if sync_broadcast and node_id:
+                sync_broadcast(f"[Node {node_id}] {msg}")
+            return True
+        else:
+            msg = "⚠️ Klik pertama tidak berhasil. Mencoba klik kedua..."
+            logger_obj.info(msg)
+            if sync_broadcast and node_id:
+                sync_broadcast(f"[Node {node_id}] {msg}")
+            # Try once more (sometimes CF needs a second click)
+            time.sleep(2)
+            pyautogui.moveTo(click_x, click_y, duration=0.3)
+            time.sleep(0.2)
+            pyautogui.click()
+            time.sleep(6)
+            pyautogui.moveTo(original_x, original_y, duration=0.2)
+            return True
+
+    except Exception as e:
+        logger_obj.error(f"Fixed-Coordinate Click Error: {e}")
+        return False
 
 
 def solve_cloudflare_api(page: ChromiumPage, logger_obj=logger, sync_broadcast=None, node_id=None, api_key: str = None) -> bool:
@@ -694,17 +824,20 @@ def run_drission_bot_loop(node_id: int, config: Dict[str, Any], sync_broadcast, 
                 auto_login(page, config['email'], config['password'], sync_broadcast, node_id, nama_lengkap)
             elif quota == -2:
                 # Cloudflare Turnstile challenge page
-                msg = "🛡️ Cloudflare terdeteksi! Mengeksekusi API Bypass Solver..."
+                msg = "🛡️ Cloudflare terdeteksi!"
                 sync_broadcast(f"[Node {node_id}] {msg}")
                 logger.info(msg)
                 
-                api_key = config.get('captcha_api_key')
-                success = solve_cloudflare_api(page, logger, sync_broadcast, node_id, api_key=api_key)
+                # Strategy 1: Fixed-Coordinate Physical Click (FREE, no API needed)
+                click_success = solve_cloudflare_click(page, logger, sync_broadcast, node_id)
                 
-                if success:
-                    msg = "✅ Cloudflare API Bypass Berhasil! Melanjutkan pengecekan..."
-                    sync_broadcast(f"[Node {node_id}] {msg}")
-                    logger.info(msg)
+                if not click_success:
+                    # Strategy 2: Fall back to 2Captcha API if user has a key
+                    api_key = config.get('captcha_api_key')
+                    if api_key:
+                        msg = "🔄 Klik fisik gagal. Mencoba 2Captcha API..."
+                        sync_broadcast(f"[Node {node_id}] {msg}")
+                        solve_cloudflare_api(page, logger, sync_broadcast, node_id, api_key=api_key)
             elif quota == -3:
                 sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] ⛔ PEMBLOKIRAN IP TERDETEKSI! Server Antam memblokir akses sementara karena terlalu banyak request. Bot akan beristirahat selama 3 menit sebelum mencoba lagi...")
                 time.sleep(180) # 3-minute cooldown
