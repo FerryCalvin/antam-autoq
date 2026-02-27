@@ -66,6 +66,7 @@ class AccountNodeCreate(BaseModel):
     target_location: str
     target_date: str
     proxy: Optional[str] = None
+    captcha_api_key: Optional[str] = None
 
 class AccountNodeResponse(AccountNodeCreate):
     id: int
@@ -122,7 +123,8 @@ async def api_start_node(node_id: int, db: AsyncSession = Depends(get_db)):
         "password": db_node.password,
         "target_location": db_node.target_location,
         "target_date": db_node.target_date,
-        "proxy": db_node.proxy
+        "proxy": db_node.proxy,
+        "captcha_api_key": getattr(db_node, "captcha_api_key", None)
     })
     db_node.is_active = True
     db_node.status_message = "Hunting"

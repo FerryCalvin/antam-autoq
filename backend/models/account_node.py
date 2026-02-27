@@ -16,5 +16,6 @@ class AccountNode(Base):
     target_location = Column(String, nullable=False) # e.g. SUB-01
     target_date = Column(String, nullable=False) # e.g. 2026-03-01
     proxy = Column(String, nullable=True) # Optional HTTP proxy
+    captcha_api_key = Column(String, nullable=True) # 2Captcha or CapSolver key
     is_active = Column(Boolean, default=False) # Status of the Bot Note
     status_message = Column(String, default="Ready") # Live status like 'Stopped', 'Hunting'

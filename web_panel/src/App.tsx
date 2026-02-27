@@ -11,6 +11,7 @@ interface AccountNode {
   target_location: string;
   target_date: string;
   proxy?: string;
+  captcha_api_key?: string;
   is_active: boolean;
   status_message: string;
 }
@@ -37,6 +38,7 @@ function App() {
   const [newLocation, setNewLocation] = useState('SUB-01');
   const [newDate, setNewDate] = useState('2026-03-01');
   const [newProxy, setNewProxy] = useState('');
+  const [newCaptchaKey, setNewCaptchaKey] = useState('');
   const [showPassword, setShowPassword] = useState(false);
 
   const logsEndRef = useRef<HTMLDivElement>(null);
@@ -110,10 +112,11 @@ function App() {
           password: newPassword,
           target_location: newLocation,
           target_date: newDate,
-          proxy: newProxy || null
+          proxy: newProxy || null,
+          captcha_api_key: newCaptchaKey || null
         })
       });
-      setNewNama(''); setNewNik(''); setNewNoHp(''); setNewEmail(''); setNewPassword(''); setNewProxy('');
+      setNewNama(''); setNewNik(''); setNewNoHp(''); setNewEmail(''); setNewPassword(''); setNewProxy(''); setNewCaptchaKey('');
       fetchNodes();
     } catch (e) { console.error(e); }
   };
@@ -202,7 +205,10 @@ function App() {
                 <option value="YOG-01">Butik Emas LM - Yogyakarta</option>
               </select>
               <input required type="text" placeholder="Tanggal (YYYY-MM-DD)" value={newDate} onChange={e => setNewDate(e.target.value)} className="bg-slate-950 border border-slate-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500" />
-              <input placeholder="Proxy (Optional) http://..." value={newProxy} onChange={e => setNewProxy(e.target.value)} className="bg-slate-950 border border-slate-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500 col-span-2" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <input placeholder="Proxy (Optional) http://..." value={newProxy} onChange={e => setNewProxy(e.target.value)} className="bg-slate-950 border border-slate-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500" />
+              <input placeholder="2Captcha API Key (Optional)" value={newCaptchaKey} onChange={e => setNewCaptchaKey(e.target.value)} className="bg-slate-950 border border-slate-700 rounded px-3 py-2 text-sm focus:outline-none focus:border-blue-500" />
             </div>
             <button type="submit" className="w-full bg-blue-600 hover:bg-blue-500 text-white font-medium py-2 rounded-md transition flex justify-center items-center gap-2 text-sm">
               <Plus size={16} /> Add Node

@@ -2,21 +2,12 @@ import time
 import datetime
 import os
 import re
+import httpx
 import logging
 from typing import Dict, Any
 
 from DrissionPage import ChromiumPage, ChromiumOptions
 from DrissionPage.errors import ElementNotFoundError
-
-try:
-    import pyautogui
-    import cv2
-    import numpy as np
-    PYAUTOGUI_AVAILABLE = True
-    # Fail-safe to allow user to abort PyAutoGUI by moving mouse to corner
-    pyautogui.FAILSAFE = False 
-except ImportError:
-    PYAUTOGUI_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -298,113 +289,134 @@ def solve_generic_math_captcha(page: ChromiumPage, logger_obj=logger, sync_broad
 
 # Removed Actions import to prevent hardware mouse hijacking
 
-def solve_cloudflare_turnstile(page: ChromiumPage, logger_obj=logger, sync_broadcast=None, node_id=None):
-    """Attempts to auto-click the Cloudflare Turnstile verification checkbox."""
-    try:
-        # Instead of hardcoding the src (which Cloudflare changes constantly), scan all frames
-        frames = page.get_frames()
-        cf_iframe = None
-        cb = None
-        
-        for frame in frames:
-            try:
-                # Look for known turnstile DOM elements inside each frame
-                found_cb = frame.ele('.cb-c', timeout=0.1) or \
-                           frame.ele('css:input[type="checkbox"]', timeout=0.1) or \
-                           frame.ele('.mark', timeout=0.1) or \
-                           frame.ele('.ctp-checkbox-label', timeout=0.1)
-                
-                if found_cb:
-                    cf_iframe = frame
-                    cb = found_cb
-                    break
-            except:
-                continue
-                
-        if not cf_iframe:
-            # Fallback: Maybe it's not even in an iframe, or it's just the top-level document body checking
-            cb = page.ele('.cb-c', timeout=0.5) or page.ele('css:input[type="checkbox"]', timeout=0.5)
-            if cb:
-                cf_iframe = page # The main page itself contains it
 
-        if cf_iframe and cb:
-            msg = "🤖 Memverifikasi Cloudflare Turnstile (Virtual Click)..."
-            if sync_broadcast and node_id:
-                sync_broadcast(f"[Node {node_id}] {msg}")
-            logger_obj.info(msg)
+def solve_cloudflare_api(page: ChromiumPage, logger_obj=logger, sync_broadcast=None, node_id=None, api_key: str = None) -> bool:
+    """
+    Ultimate Headless Turnstile Bypass using 2Captcha API.
+    1. Extracts the sitekey from the Cloudflare iframe or page DOM.
+    2. Sends it to 2Captcha.
+    3. Waits for the token.
+    4. Injects it back into `<input name=\"cf-turnstile-response\">`
+    """
+    if not api_key:
+        msg = "⚠️ 2Captcha API Key is missing! Cannot auto-solve Cloudflare."
+        logger_obj.error(msg)
+        if sync_broadcast and node_id:
+            sync_broadcast(f"[Node {node_id}] {msg}")
+        return False
+
+    try:
+        msg = "🔍 Sedang mengekstrak Cloudflare Sitekey..."
+        logger_obj.info(msg)
+        
+        # Method 1: Look for Turnstile div
+        sitekey = None
+        turnstile_div = page.ele('.cf-turnstile', timeout=2)
+        if turnstile_div:
+            sitekey = turnstile_div.attr('data-sitekey')
             
-            # We use virtual coordinate clicks (click.at) instead of hardware Actions
-            # This allows unlimited bots to run in the background without stealing the user's mouse
-            try:
-                # 1. Try a standard DrissionPage synthesized click (simulates Trusted Event)
-                cb.click()
-                time.sleep(1)
-            except Exception as e:
-                logger_obj.warning(f"Standard click failed: {e}")
+        # Method 2: Regex script tags if it's rendered globally
+        if not sitekey:
+            html = page.html
+            match = re.search(r'data-sitekey=["\'](.*?)["\']', html)
+            if match:
+                sitekey = match.group(1)
                 
-            try:
-                # 2. Try an exact coordinate virtual click offset slightly from top-left
-                cb.click.at(offset_x=5, offset_y=5)
-                time.sleep(1)
-            except Exception as e:
-                pass
-                
-            try:
-                # 3. Fallback to Javascript force click
-                cb.click(by_js=True)
-            except:
-                pass
-                
-            time.sleep(3)
-            return True
+        # Method 3: Default Antam Sitekey (Hardcoded fallback as it rarely changes)
+        if not sitekey:
+            logger_obj.warning("Could not extract sitekey from DOM. Using known Antam Sitekey.")
+            # 0x4AAAAAAAB-Q2d9X_4hOh0D is a common placeholder, but Turnstile requires the actual public key
+            # If we fail to find it, the API will reject it. We must abort if we don't have it.
+            msg = "❌ Gagal menemukan Sitekey Cloudflare di halaman ini."
+            logger_obj.error(msg)
+            return False
             
-        else:
-            # NUCLEAR OPTION: If no iframe found in DOM (e.g., deeply nested shadow cross-origin)
-            # We look at the actual computer screen pixels using PyAutoGUI
-            if PYAUTOGUI_AVAILABLE:
-                template_path = os.path.join(os.getcwd(), 'cloudflare_logo_template.png')
-                if os.path.exists(template_path):
-                    msg = "🤖 MENCOBA NUCLEAR BYPASS: Mendeteksi Layar dengan Computer Vision..."
-                    if sync_broadcast and node_id:
-                        sync_broadcast(f"[Node {node_id}] {msg}")
-                    logger_obj.info(msg)
-                    
-                    # Take screenshot of screen
-                    screenshot = pyautogui.screenshot()
-                    screenshot = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
-                    template = cv2.imread(template_path)
-                    
-                    # Match template
-                    res = cv2.matchTemplate(screenshot, template, cv2.TM_CCOEFF_NORMED)
-                    threshold = 0.8
-                    loc = np.where(res >= threshold)
-                    
-                    if len(loc[0]) > 0:
-                        # Found the logo!
-                        # The Turnstile checkbox is typically ~150-180 pixels to the left of the CF logo
-                        logo_y = loc[0][0]
-                        logo_x = loc[1][0]
-                        h, w = template.shape[:-1]
-                        
-                        target_x = logo_x - 140
-                        target_y = logo_y + (h // 2)
-                        
-                        logger_obj.info(f"Target found on screen at {target_x}, {target_y}")
-                        # Move physical mouse and click
-                        original_pos = pyautogui.position()
-                        pyautogui.moveTo(target_x, target_y, duration=0.5)
-                        time.sleep(0.2)
-                        pyautogui.click()
-                        time.sleep(0.5)
-                        # Return mouse to user
-                        pyautogui.moveTo(original_pos.x, original_pos.y, duration=0.2)
-                        
-                        time.sleep(3)
-                        return True
+        page_url = page.url
+        msg = f"⏳ Meminta token Turnstile dari 2Captcha (Sitekey: {sitekey[:8]}...)"
+        logger_obj.info(msg)
+        if sync_broadcast and node_id:
+            sync_broadcast(f"[Node {node_id}] {msg}")
             
+        # 1. Submit the task
+        with httpx.Client() as client:
+            submit_payload = {
+                "key": api_key,
+                "method": "turnstile",
+                "sitekey": sitekey,
+                "pageurl": page_url,
+                "json": 1
+            }
+            res = client.post("https://2captcha.com/in.php", data=submit_payload, timeout=10)
+            data = res.json()
+            if data.get("status") != 1:
+                logger_obj.error(f"2Captcha Submit Error: {data.get('request')}")
+                return False
+                
+            task_id = data.get("request")
+            
+        # 2. Poll for the result
+        msg = f"🕒 Menunggu 2Captcha menyelesaikan tantangan (Task ID: {task_id})..."
+        logger_obj.info(msg)
+        
+        token = None
+        for i in range(25): # Poll for up to 125 seconds (Turnstile usually takes 5-20s)
+            time.sleep(5)
+            with httpx.Client() as client:
+                poll_payload = {
+                    "key": api_key,
+                    "action": "get",
+                    "id": task_id,
+                    "json": 1
+                }
+                res = client.get("https://2captcha.com/res.php", params=poll_payload, timeout=10)
+                data = res.json()
+                
+                if data.get("status") == 1:
+                    token = data.get("request")
+                    break
+                elif data.get("request") != "CAPCHA_NOT_READY":
+                    logger_obj.error(f"2Captcha Polling Error: {data.get('request')}")
+                    return False
+                    
+        if not token:
+            logger_obj.error("🕒 2Captcha Time Out. Token not received.")
+            return False
+            
+        msg = "✅ Token Turnstile diterima! Menyuntikkan ke browser..."
+        logger_obj.info(msg)
+        if sync_broadcast and node_id:
+            sync_broadcast(f"[Node {node_id}] {msg}")
+            
+        # 3. Inject token into DOM so Cloudflare registers it
+        page.run_js(f'''
+            let cf_inputs = document.querySelectorAll('input[name="cf-turnstile-response"]');
+            cf_inputs.forEach(input => {{
+                input.value = "{token}";
+            }});
+            
+            // If there's an invisible callback in Turnstile, attempt to call it directly
+            // Oftentimes just setting the value and clicking the submit button is enough
+        ''')
+        
+        time.sleep(1)
+        
+        # 4. Attempt to trigger the page's original submit or let nature take its course
+        # Antam usually auto-submits once the cf-turnstile-response input has a value,
+        # but just in case, we try clicking the primary submit button if visible
+        try:
+            submit_btn = page.ele('tag:button@@type=submit', timeout=1)
+            if submit_btn:
+                submit_btn.click(by_js=True)
+        except:
+            pass
+            
+        time.sleep(5)
+        return True
+        
     except Exception as e:
-        logger_obj.warning(f"Error solving turnstile: {e}")
-    return False
+        logger_obj.error(f"Error solving Turnstile via API: {e}")
+        return False
+
 
 def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, node_id: int, nama: str) -> bool:
     """Automates the login sequence if the bot gets redirected to /masuk."""
@@ -681,9 +693,18 @@ def run_drission_bot_loop(node_id: int, config: Dict[str, Any], sync_broadcast, 
                 # Trigger Auto-Login flow
                 auto_login(page, config['email'], config['password'], sync_broadcast, node_id, nama_lengkap)
             elif quota == -2:
-                sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🛡️ Cloudflare aktif. Mencoba auto-verifikasi checklist...")
-                time.sleep(2)
-                solve_cloudflare_turnstile(page, logger, sync_broadcast, node_id)
+                # Cloudflare Turnstile challenge page
+                msg = "🛡️ Cloudflare terdeteksi! Mengeksekusi API Bypass Solver..."
+                sync_broadcast(f"[Node {node_id}] {msg}")
+                logger.info(msg)
+                
+                api_key = config.get('captcha_api_key')
+                success = solve_cloudflare_api(page, logger, sync_broadcast, node_id, api_key=api_key)
+                
+                if success:
+                    msg = "✅ Cloudflare API Bypass Berhasil! Melanjutkan pengecekan..."
+                    sync_broadcast(f"[Node {node_id}] {msg}")
+                    logger.info(msg)
             elif quota == -3:
                 sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] ⛔ PEMBLOKIRAN IP TERDETEKSI! Server Antam memblokir akses sementara karena terlalu banyak request. Bot akan beristirahat selama 3 menit sebelum mencoba lagi...")
                 time.sleep(180) # 3-minute cooldown
