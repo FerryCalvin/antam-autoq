@@ -268,6 +268,24 @@ def solve_generic_math_captcha(page: ChromiumPage, logger_obj=logger, sync_broad
         logger_obj.warning(f"Math Captcha Error: {ex}")
     return False
 
+def solve_cloudflare_turnstile(page: ChromiumPage, logger_obj=logger, sync_broadcast=None, node_id=None):
+    """Attempts to auto-click the Cloudflare Turnstile verification checkbox."""
+    try:
+        cf_iframe = page.get_frame('@src^https://challenges.cloudflare.com', timeout=3)
+        if cf_iframe:
+            cb = cf_iframe.ele('.cb-c', timeout=2) or cf_iframe.ele('tag:body', timeout=1)
+            if cb:
+                msg = "🤖 Auto-clicking Cloudflare Verifikasi Checkbox..."
+                if sync_broadcast and node_id:
+                    sync_broadcast(f"[Node {node_id}] {msg}")
+                logger_obj.info(msg)
+                cb.click()
+                time.sleep(3)
+                return True
+    except Exception as e:
+        pass
+    return False
+
 def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, node_id: int, nama: str) -> bool:
     """Automates the login sequence if the bot gets redirected to /masuk."""
     sync_broadcast(f"[Node {node_id}] [{nama}] 🔑 Redirected to Login form. Starting Auto-Login...")
@@ -333,12 +351,12 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
                 if submit_btn:
                     submit_btn.click() # Real human click!
                 else:
-                    login_form.submit()
+                    pass_inp.input('\n')
             else:
-                pass_inp.submit()
+                pass_inp.input('\n')
         except Exception as e:
             logger.warning(f"Native trusted form submit failed: {e}")
-            pass_inp.submit()
+            pass_inp.input('\n')
         
         # Wait for redirect to antrean home
         page.wait.load_start(timeout=5)
@@ -543,7 +561,9 @@ def run_drission_bot_loop(node_id: int, config: Dict[str, Any], sync_broadcast, 
                 # Trigger Auto-Login flow
                 auto_login(page, config['email'], config['password'], sync_broadcast, node_id, nama_lengkap)
             elif quota == -2:
-                sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🛡️ Cloudflare aktif. Membaca halaman... Silakan centang manual jika diminta di Chrome.")
+                sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🛡️ Cloudflare aktif. Mencoba auto-verifikasi checklist...")
+                time.sleep(2)
+                solve_cloudflare_turnstile(page, logger, sync_broadcast, node_id)
             elif quota == -3:
                 sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] ⛔ PEMBLOKIRAN IP TERDETEKSI! Server Antam memblokir akses sementara karena terlalu banyak request. Bot akan beristirahat selama 3 menit sebelum mencoba lagi...")
                 time.sleep(180) # 3-minute cooldown
