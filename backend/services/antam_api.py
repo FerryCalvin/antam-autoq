@@ -8,6 +8,16 @@ from typing import Dict, Any
 from DrissionPage import ChromiumPage, ChromiumOptions
 from DrissionPage.errors import ElementNotFoundError
 
+try:
+    import pyautogui
+    import cv2
+    import numpy as np
+    PYAUTOGUI_AVAILABLE = True
+    # Fail-safe to allow user to abort PyAutoGUI by moving mouse to corner
+    pyautogui.FAILSAFE = False 
+except ImportError:
+    PYAUTOGUI_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 # Mapping from internal bot codes (stored in DB) to Antam website's HTML <select> integer values
@@ -347,6 +357,50 @@ def solve_cloudflare_turnstile(page: ChromiumPage, logger_obj=logger, sync_broad
                 
             time.sleep(3)
             return True
+            
+        else:
+            # NUCLEAR OPTION: If no iframe found in DOM (e.g., deeply nested shadow cross-origin)
+            # We look at the actual computer screen pixels using PyAutoGUI
+            if PYAUTOGUI_AVAILABLE:
+                template_path = os.path.join(os.getcwd(), 'cloudflare_logo_template.png')
+                if os.path.exists(template_path):
+                    msg = "🤖 MENCOBA NUCLEAR BYPASS: Mendeteksi Layar dengan Computer Vision..."
+                    if sync_broadcast and node_id:
+                        sync_broadcast(f"[Node {node_id}] {msg}")
+                    logger_obj.info(msg)
+                    
+                    # Take screenshot of screen
+                    screenshot = pyautogui.screenshot()
+                    screenshot = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
+                    template = cv2.imread(template_path)
+                    
+                    # Match template
+                    res = cv2.matchTemplate(screenshot, template, cv2.TM_CCOEFF_NORMED)
+                    threshold = 0.8
+                    loc = np.where(res >= threshold)
+                    
+                    if len(loc[0]) > 0:
+                        # Found the logo!
+                        # The Turnstile checkbox is typically ~150-180 pixels to the left of the CF logo
+                        logo_y = loc[0][0]
+                        logo_x = loc[1][0]
+                        h, w = template.shape[:-1]
+                        
+                        target_x = logo_x - 140
+                        target_y = logo_y + (h // 2)
+                        
+                        logger_obj.info(f"Target found on screen at {target_x}, {target_y}")
+                        # Move physical mouse and click
+                        original_pos = pyautogui.position()
+                        pyautogui.moveTo(target_x, target_y, duration=0.5)
+                        time.sleep(0.2)
+                        pyautogui.click()
+                        time.sleep(0.5)
+                        # Return mouse to user
+                        pyautogui.moveTo(original_pos.x, original_pos.y, duration=0.2)
+                        
+                        time.sleep(3)
+                        return True
             
     except Exception as e:
         logger_obj.warning(f"Error solving turnstile: {e}")
