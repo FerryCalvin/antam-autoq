@@ -16,15 +16,15 @@ async def seed_data():
         
     async with AsyncSessionLocal() as session:
         # Check if Profile already exists
-        result = await session.execute(select(Profile).filter_by(nik="3525xxxxxxxxxxxx"))
+        result = await session.execute(select(Profile).filter_by(nik="1234567890123456"))
         existing_profile = result.scalars().first()
         
         if not existing_profile:
             profile = Profile(
-                nama_lengkap="Fairnanda Kurnia Gusty",
-                nik="3578282108030001",
-                no_hp="081232667500",
-                email="ferrycalvin27@gmail.com",
+                nama_lengkap="Nama Lengkap",
+                nik="1234567890123456",
+                no_hp="081234567890",
+                email="user@example.com",
                 is_active=True
             )
             session.add(profile)
