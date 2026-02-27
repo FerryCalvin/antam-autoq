@@ -53,12 +53,30 @@ def _get_stealth_page(proxy: str = None, node_id: int = 1) -> ChromiumPage:
     
     # Hide automation features and disable the infobars
     co.set_argument('--disable-infobars')
+    co.set_argument('--disable-blink-features=AutomationControlled')
+    co.set_argument('--no-first-run')
+    co.set_argument('--password-store=basic')
+    co.set_argument('--use-mock-keychain')
     # DO NOT override user_agent! It breaks Sec-CH-UA sync causing Turnstile infinite loops!
     
     if proxy:
         co.set_proxy(proxy)
         
     page = ChromiumPage(addr_or_opts=co)
+    
+    # 💥 ULTIMATE CLOUDFLARE BYPASS: Inject scripts before any page loads
+    # This completely erases the webdriver flag from the JavaScript environment
+    # Many times, this causes CF to auto-pass without even showing a checkbox!
+    anti_detect_js = '''
+        Object.defineProperty(navigator, 'webdriver', {
+          get: () => undefined
+        });
+    '''
+    # Playwright's add_init_script equivalent in DrissionPage is page.add_init_js or executing CDP directly
+    try:
+        page.run_cdp('Page.addScriptToEvaluateOnNewDocument', source=anti_detect_js)
+    except Exception as e:
+        logger.warning(f"Failed to inject Anti-Detect JS: {e}")
     page.set.timeouts(page_load=15, script=15)
     return page
 
