@@ -273,8 +273,33 @@ from DrissionPage.common import Actions
 def solve_cloudflare_turnstile(page: ChromiumPage, logger_obj=logger, sync_broadcast=None, node_id=None):
     """Attempts to auto-click the Cloudflare Turnstile verification checkbox."""
     try:
-        cf_iframe = page.get_frame('@src^https://challenges.cloudflare.com', timeout=3)
-        if cf_iframe:
+        # Instead of hardcoding the src (which Cloudflare changes constantly), scan all frames
+        frames = page.get_frames()
+        cf_iframe = None
+        cb = None
+        
+        for frame in frames:
+            try:
+                # Look for known turnstile DOM elements inside each frame
+                found_cb = frame.ele('.cb-c', timeout=0.1) or \
+                           frame.ele('css:input[type="checkbox"]', timeout=0.1) or \
+                           frame.ele('.mark', timeout=0.1) or \
+                           frame.ele('.ctp-checkbox-label', timeout=0.1)
+                
+                if found_cb:
+                    cf_iframe = frame
+                    cb = found_cb
+                    break
+            except:
+                continue
+                
+        if not cf_iframe:
+            # Fallback: Maybe it's not even in an iframe, or it's just the top-level document body checking
+            cb = page.ele('.cb-c', timeout=0.5) or page.ele('css:input[type="checkbox"]', timeout=0.5)
+            if cb:
+                cf_iframe = page # The main page itself contains it
+
+        if cf_iframe and cb:
             msg = "🤖 Menyuntikkan Kursor Manusia ke Cloudflare Turnstile..."
             if sync_broadcast and node_id:
                 sync_broadcast(f"[Node {node_id}] {msg}")
@@ -286,11 +311,11 @@ def solve_cloudflare_turnstile(page: ChromiumPage, logger_obj=logger, sync_broad
                 ac = Actions(page)
                 
                 # Cloudflare check boxes are usually located a bit to the left of the center of the iframe
-                # We move the mouse to the iframe bounding box, wait a human-like delay, and click
-                ac.move_to(cf_iframe)
+                # We move the mouse to the element/iframe bounding box, wait a human-like delay, and click
+                ac.move_to(cb) 
                 time.sleep(0.5)
-                # Offset slightly to the left where the box usually is (e.g. -50px from center horizontally)
-                ac.move(offset_x=-40, offset_y=0)
+                # Offset slightly to the left center where the box usually is visually over the label (e.g. -5px from center horizontally)
+                ac.move(offset_x=-5, offset_y=0)
                 time.sleep(0.3)
                 ac.click()
                 
@@ -300,21 +325,15 @@ def solve_cloudflare_turnstile(page: ChromiumPage, logger_obj=logger, sync_broad
                 logger_obj.warning(f"Actions click failed: {inner_e}")
                 
             # Fallback to the aggressive DOM click if actions fail
-            cb = cf_iframe.ele('css:input[type="checkbox"]', timeout=1) or \
-                 cf_iframe.ele('.cb-c', timeout=1) or \
-                 cf_iframe.ele('.mark', timeout=1) or \
-                 cf_iframe.ele('.ctp-checkbox-label', timeout=1) or \
-                 cf_iframe.ele('tag:body', timeout=1)
-                 
-            if cb:
-                if cb.tag == 'body':
-                    cb.click(by_js=True)
-                else:
-                    cb.click()
-                time.sleep(3)
-                return True
+            if cb.tag == 'body':
+                cb.click(by_js=True)
+            else:
+                cb.click()
+            time.sleep(3)
+            return True
+            
     except Exception as e:
-        pass
+        logger_obj.warning(f"Error solving turnstile: {e}")
     return False
 
 def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, node_id: int, nama: str) -> bool:
