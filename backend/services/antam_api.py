@@ -273,13 +273,25 @@ def solve_cloudflare_turnstile(page: ChromiumPage, logger_obj=logger, sync_broad
     try:
         cf_iframe = page.get_frame('@src^https://challenges.cloudflare.com', timeout=3)
         if cf_iframe:
-            cb = cf_iframe.ele('.cb-c', timeout=2) or cf_iframe.ele('tag:body', timeout=1)
+            # New CF Turnstile uses shadow DOMs and different classes depending on the challenge type
+            cb = cf_iframe.ele('css:input[type="checkbox"]', timeout=1) or \
+                 cf_iframe.ele('.cb-c', timeout=1) or \
+                 cf_iframe.ele('.mark', timeout=1) or \
+                 cf_iframe.ele('.ctp-checkbox-label', timeout=1) or \
+                 cf_iframe.ele('tag:body', timeout=1)
+                 
             if cb:
                 msg = "🤖 Auto-clicking Cloudflare Verifikasi Checkbox..."
                 if sync_broadcast and node_id:
                     sync_broadcast(f"[Node {node_id}] {msg}")
                 logger_obj.info(msg)
-                cb.click()
+                
+                # Checkboxes sometimes need native clicks, but the body fallback might need JS
+                if cb.tag == 'body':
+                    cb.click(by_js=True)
+                else:
+                    cb.click()
+                
                 time.sleep(3)
                 return True
     except Exception as e:
