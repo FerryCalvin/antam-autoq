@@ -268,12 +268,38 @@ def solve_generic_math_captcha(page: ChromiumPage, logger_obj=logger, sync_broad
         logger_obj.warning(f"Math Captcha Error: {ex}")
     return False
 
+from DrissionPage.common import Actions
+
 def solve_cloudflare_turnstile(page: ChromiumPage, logger_obj=logger, sync_broadcast=None, node_id=None):
     """Attempts to auto-click the Cloudflare Turnstile verification checkbox."""
     try:
         cf_iframe = page.get_frame('@src^https://challenges.cloudflare.com', timeout=3)
         if cf_iframe:
-            # New CF Turnstile uses shadow DOMs and different classes depending on the challenge type
+            msg = "🤖 Menyuntikkan Kursor Manusia ke Cloudflare Turnstile..."
+            if sync_broadcast and node_id:
+                sync_broadcast(f"[Node {node_id}] {msg}")
+            logger_obj.info(msg)
+            
+            # Use hardware-level mouse actions to simulate human movement and click
+            # This completely bypasses JavaScript event listener defenses
+            try:
+                ac = Actions(page)
+                
+                # Cloudflare check boxes are usually located a bit to the left of the center of the iframe
+                # We move the mouse to the iframe bounding box, wait a human-like delay, and click
+                ac.move_to(cf_iframe)
+                time.sleep(0.5)
+                # Offset slightly to the left where the box usually is (e.g. -50px from center horizontally)
+                ac.move(offset_x=-40, offset_y=0)
+                time.sleep(0.3)
+                ac.click()
+                
+                time.sleep(3)
+                return True
+            except Exception as inner_e:
+                logger_obj.warning(f"Actions click failed: {inner_e}")
+                
+            # Fallback to the aggressive DOM click if actions fail
             cb = cf_iframe.ele('css:input[type="checkbox"]', timeout=1) or \
                  cf_iframe.ele('.cb-c', timeout=1) or \
                  cf_iframe.ele('.mark', timeout=1) or \
@@ -281,17 +307,10 @@ def solve_cloudflare_turnstile(page: ChromiumPage, logger_obj=logger, sync_broad
                  cf_iframe.ele('tag:body', timeout=1)
                  
             if cb:
-                msg = "🤖 Auto-clicking Cloudflare Verifikasi Checkbox..."
-                if sync_broadcast and node_id:
-                    sync_broadcast(f"[Node {node_id}] {msg}")
-                logger_obj.info(msg)
-                
-                # Checkboxes sometimes need native clicks, but the body fallback might need JS
                 if cb.tag == 'body':
                     cb.click(by_js=True)
                 else:
                     cb.click()
-                
                 time.sleep(3)
                 return True
     except Exception as e:
