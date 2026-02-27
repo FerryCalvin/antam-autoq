@@ -14,12 +14,15 @@ __pycache__/
 
 # Python Logs
 *.log
-# SQLite DB
+
+# SQLite DB (regenerated on startup)
 *.db
 *.sqlite3
 
-# DrissionPage Browser Profiles
-chrome_profile_*
+# DrissionPage / nodriver Browser Profiles
+chrome_profile_*/
+nodriver_profile/
+uc_profile/
 
 # Node
 node_modules/
@@ -39,8 +42,11 @@ dist/
 .DS_Store
 Thumbs.db
 
-# Test outputs
-*.png
-uc_profile/
-nodriver_profile/
+# Test outputs & scripts (development only)
 test_*.py
+*.png
+*_result.txt
+
+# Lock files
+downloaded_files/
+tickets/
