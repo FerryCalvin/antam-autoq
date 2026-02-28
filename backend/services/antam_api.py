@@ -180,12 +180,13 @@ def check_quota(page: ChromiumPage, location_id: str, sync_broadcast=None, node_
                 (page.ele('css:iframe[src*="challenges.cloudflare.com"]', timeout=0.5) and "challenges.cloudflare.com" in html_lower)
         
         is_login = "/masuk" in page_url or "/login" in page_url or "/home" in page_url
-        is_boutique = "select[name=site]" in html_lower and "tampilkan butik" in html_lower
+        is_boutique = ("select" in html_lower and "tampilkan butik" in html_lower) or \
+                      ("antrean belm" in html_lower and "pilih belm" in html_lower)
         is_quota_page = "select#wakda" in html_lower
         is_announcement = page.ele('text:Pengumuman', timeout=0.5) or page.ele('css:.modal-content', timeout=0.5)
         
         # ACTIVE PAGE GUARD: If we are on login or boutique selection, we are NOT in night mode.
-        is_active_page = is_login or is_boutique
+        is_active_page = is_login or is_boutique or is_quota_page
         
         # --- DYNAMIC STATUS REPORTING (ADAPTIVE LOGS) ---
         if sync_broadcast and node_id:
@@ -856,16 +857,23 @@ def run_drission_bot_loop(node_id: int, config: Dict[str, Any], sync_broadcast, 
             elif quota == -5:
                 # Night Mode (Wait for opening hour)
                 detected_h = safe_run_js(page, 'return window.__detected_opening_hour')
-                opening_hour = int(detected_h) if detected_h is not None else 8
-                current_hour = datetime.datetime.now().hour
                 
-                if current_hour < opening_hour:
-                    sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🌙 Standby: Butik buka jam {opening_hour} (Sekarang jam {current_hour}). Tidur 5 menit...")
-                    time.sleep(300)
+                if detected_h is not None:
+                    opening_hour = int(detected_h)
+                    current_hour = datetime.datetime.now().hour
+                    
+                    if current_hour < opening_hour:
+                        sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🌙 Standby: Butik buka jam {opening_hour} (Sekarang jam {current_hour}). Tidur 5 menit...")
+                        time.sleep(300)
+                    else:
+                        # Closing in on opening time, faster refresh
+                        sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🕒 Jam buka mendekat ({opening_hour}:00). Standby tiap 10 detik...")
+                        time.sleep(10)
                 else:
-                    # Closing in on opening time, faster refresh
-                    sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🕒 Jam buka mendekat ({opening_hour}:00). Standby tiap 10 detik...")
-                    time.sleep(10)
+                    # If we got -5 but NO opening hour was captured, something is wrong or ambiguous.
+                    # Do NOT sleep for 5 minutes. Just a moderate refresh.
+                    sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] ⚠️ Standby detected but hour unknown. Refreshing in 30s...")
+                    time.sleep(30)
                 continue
                 
             else:
