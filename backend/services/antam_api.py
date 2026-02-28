@@ -210,8 +210,21 @@ def check_quota(page: ChromiumPage, location_id: str, sync_broadcast=None, node_
         else:
             logger.info(f"Adaptive: State recognized as {page.url}. No reload needed.")
 
-        # --- IP BLOCK AUTO-COOLDOWN BUSTER ---
-        if page.ele('text:pemblokiran IP', timeout=1) or page.ele('text:An Error Was Encountered', timeout=1):
+        # --- ERROR & BLOCK DETECTION ---
+        # 1. Action Not Allowed (CSRF/Session Error)
+        if "the action you have requested is not allowed" in html_lower or page.ele('text:An Error Was Encountered', timeout=1):
+            if "not allowed" in html_lower:
+                msg = "⚠️ Session Error (Action Not Allowed) detected. Resetting..."
+                if sync_broadcast and node_id: sync_broadcast(f"[Node {node_id}] {msg}")
+                kembali_btn = page.ele('text:Kembali', timeout=1) or page.ele('tag:button@@text():Kembali')
+                if kembali_btn:
+                    kembali_btn.click()
+                else:
+                    page.get("https://antrean.logammulia.com/login", retry=0, timeout=10)
+                return 0 # Immediate retry
+
+        # 2. IP Blocking detection
+        if "pemblokiran ip" in html_lower:
             if sync_broadcast and node_id:
                 sync_broadcast(f"[Node {node_id}] [{nama or 'Bot'}] ⛔ IP Blocked/Limit detected.")
             return -3
@@ -535,9 +548,18 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
                 time.sleep(2)
                 continue
             
-            # Try to close any overlaying Splash Screen or "Oops" modals
+            # Try to close any overlaying Splash Screen, "Oops" modals, or Action Not Allowed errors
             try:
                 handle_oops_modal(page, logger, sync_broadcast, node_id)
+                
+                # Check for Action Not Allowed in Login Wait
+                if "the action you have requested is not allowed" in safe_get(page, "html").lower():
+                    kembali_btn = page.ele('text:Kembali', timeout=1)
+                    if kembali_btn: 
+                        kembali_btn.click()
+                        time.sleep(1)
+                    else:
+                        page.get("https://antrean.logammulia.com/login", retry=0, timeout=10)
                 
                 splash_close = page.ele('text:Tutup', timeout=1) or page.ele('css:.close', timeout=1)
                 if splash_close and splash_close.is_displayed():
