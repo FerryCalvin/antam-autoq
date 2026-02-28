@@ -130,6 +130,30 @@ def safe_run_js(page, script, retries=5):
             raise e
     return None
 
+def handle_oops_modal(page, logger_obj=logger, sync_broadcast=None, node_id=None):
+    """Detects and closes the 'Oops' error modal if reCAPTCHA or other errors occur."""
+    try:
+        # Looking for the "Oops" modal seen in screenshot
+        oops_modal = page.ele('text:Oops', timeout=1)
+        if oops_modal and oops_modal.is_displayed():
+            msg_text = safe_get(page, "html").lower()
+            if "recaptcha" in msg_text or "captcha" in msg_text:
+                msg = "⚠️ Modal 'Oops' terdeteksi (Masalah CAPTCHA). Menutup dan mencoba ulang..."
+                logger_obj.warning(msg)
+                if sync_broadcast and node_id: sync_broadcast(f"[Node {node_id}] {msg}")
+                
+                ok_btn = page.ele('text:OK', timeout=1) or page.ele('css:button.swal2-confirm')
+                if ok_btn: 
+                    ok_btn.click()
+                    time.sleep(1)
+                
+                # Refresh to start clean
+                page.refresh()
+                return True
+    except:
+        pass
+    return False
+
 def check_quota(page: ChromiumPage, location_id: str, sync_broadcast=None, node_id=None, nama=None) -> int:
     """
     Returns the integer quota available (or 1 if ANY slot is found), 0 if none.
@@ -498,8 +522,10 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
                 time.sleep(2)
                 continue
             
-            # Try to close any overlaying Splash Screen
+            # Try to close any overlaying Splash Screen or "Oops" modals
             try:
+                handle_oops_modal(page, logger, sync_broadcast, node_id)
+                
                 splash_close = page.ele('text:Tutup', timeout=1) or page.ele('css:.close', timeout=1)
                 if splash_close and splash_close.is_displayed():
                     splash_close.click()
@@ -570,6 +596,10 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
             
             return True
         else:
+            # CHECK FOR OOPS MODAL
+            if handle_oops_modal(page, logger, sync_broadcast, node_id):
+                return False # Let the caller retry
+                
             sync_broadcast(f"[Node {node_id}] [{nama}] ❌ Login Form still present (Wrong Password/Captcha?). Retrying...")
             return False
             

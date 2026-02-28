@@ -40,7 +40,7 @@ async def run_simulation():
     page = _get_stealth_page(proxy=node.proxy, node_id=999)
     try:
         # Navigate to login
-        page.get("https://antrean.logammulia.com/masuk")
+        page.get("https://antrean.logammulia.com/login")
         
         # 2. Automated login
         print("🤖 Attempting Auto-Login...")
@@ -68,19 +68,44 @@ async def run_simulation():
         }
         
         print("🚀 EXECUTING SNIPER NOW!")
-        start_time = time.time()
         
-        # We manually inject a dummy option into #wakda if it's empty to allow JS to work
+        # We MUST inject the dummy option BEFORE calling submit_booking
+        # so that it passes the initial 'select#wakda' display check.
         page.run_js('''
             var sel = document.querySelector('select#wakda');
-            if(sel && sel.options.length <= 1) {
-                var opt = document.createElement('option');
-                opt.value = "SIMULATION_VALUE";
-                opt.text = "08:00 - 09:00 (Simulation)";
-                sel.add(opt);
+            if(!sel) {
+                // Create a VISIBLE dummy select to pass .ele_displayed() check
+                sel = document.createElement('select');
+                sel.id = 'wakda';
+                sel.style.position = 'fixed';
+                sel.style.top = '50%';
+                sel.style.left = '50%';
+                sel.style.width = '200px';
+                sel.style.height = '40px';
+                sel.style.zIndex = '10000';
+                sel.style.border = '2px solid red';
+                sel.style.display = 'block';
+                sel.style.visibility = 'visible';
+                document.body.appendChild(sel);
             }
+            // Clear existing and add simulation option
+            sel.innerHTML = ''; 
+            var opt = document.createElement('option');
+            opt.value = "SIMULATION_VALUE";
+            opt.text = "08:00 - 09:00 (Simulation)";
+            sel.add(opt);
+            sel.value = "SIMULATION_VALUE";
+            
+            // Highlight for visibility
+            var msg = document.createElement('div');
+            msg.innerHTML = '<h1 style="color:red; background:white; position:fixed; top:40%; left:50%; z-index:10001; padding:20px; border:3px solid red;">🔥 SIMULASI KUOTA AKTIF! 🔥</h1>';
+            document.body.appendChild(msg);
+            
+            sel.dispatchEvent(new Event('change', { bubbles: true }));
         ''')
         
+        time.sleep(1) # Let DOM settle
+        start_time = time.time()
         res = submit_booking(page, config_payload, site_id)
         
         end_time = time.time()
