@@ -686,6 +686,10 @@ def submit_booking(page: ChromiumPage, profile_data: Dict[str, str], location_id
         target_wakda_value = None
         for index, opt in enumerate(options):
             if index > 0 and opt.attr('value') and not opt.attr('disabled'):
+                text = opt.text.lower()
+                if "tersedia 0/" in text:
+                    logger.info(f"[SNIPER] Skipping slot with 0 availability: {opt.text}")
+                    continue
                 target_wakda_value = opt.attr('value')
                 break
                 

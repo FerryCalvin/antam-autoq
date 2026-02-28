@@ -6,6 +6,9 @@ import os
 if sys.version_info[0] == 3 and sys.platform.startswith('win'):
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
+import logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,7 +20,7 @@ from backend.config.database import engine, AsyncSessionLocal
 from backend.models import Base
 from backend.models.account_node import AccountNode
 
-from backend.websockets import ws_manager
+from backend.ws_manager import ws_manager
 from backend.bot_manager import BotManager
 from fastapi import WebSocket, WebSocketDisconnect
 
@@ -68,6 +71,17 @@ class AccountNodeCreate(BaseModel):
     proxy: Optional[str] = None
     captcha_api_key: Optional[str] = None
 
+class AccountNodeUpdate(BaseModel):
+    nama_lengkap: Optional[str] = None
+    nik: Optional[str] = None
+    no_hp: Optional[str] = None
+    email: Optional[str] = None
+    password: Optional[str] = None
+    target_location: Optional[str] = None
+    target_date: Optional[str] = None
+    proxy: Optional[str] = None
+    captcha_api_key: Optional[str] = None
+
 class AccountNodeResponse(AccountNodeCreate):
     id: int
     is_active: bool
@@ -91,6 +105,24 @@ async def create_node(node: AccountNodeCreate, db: AsyncSession = Depends(get_db
     
     # Broadcast addition log
     await ws_manager.broadcast(f"[System] ⚙️ Added new node: {db_node.nama_lengkap}")
+    return db_node
+
+@app.put("/api/nodes/{node_id}", response_model=AccountNodeResponse)
+async def update_node(node_id: int, node_update: AccountNodeUpdate, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(AccountNode).filter(AccountNode.id == node_id))
+    db_node = result.scalars().first()
+    if not db_node:
+        raise HTTPException(status_code=404, detail="Node not found")
+    
+    update_data = node_update.dict(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(db_node, key, value)
+    
+    await db.commit()
+    await db.refresh(db_node)
+    
+    # Broadcast update log
+    await ws_manager.broadcast(f"[System] ⚙️ Updated node: {db_node.nama_lengkap}")
     return db_node
 
 @app.delete("/api/nodes/{node_id}")
