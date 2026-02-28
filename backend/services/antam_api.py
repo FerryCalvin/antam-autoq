@@ -248,17 +248,18 @@ def check_quota(page: ChromiumPage, location_id: str, sync_broadcast=None, node_
                 page.wait.load_start(timeout=5)
 
         # Final checks
-        if "/masuk" in page.url or "/login" in page.url or "/home" in page.url:
+        page_url = safe_get(page, "url")
+        if "/masuk" in page_url or "/login" in page_url or "/home" in page_url:
             return -1
-        if "/users" in page.url:
+        if "/users" in page_url:
             menu_btn = page.ele('text:Menu Antrean', timeout=2)
             if menu_btn and str(menu_btn.tag) != 'NoneElement':
                 menu_btn.click()
                 page.wait.load_start(timeout=5)
             
         if not page.wait.ele_displayed('select#wakda', timeout=15):
-            title = page.title.lower() if page.title else ""
-            h = page.html.lower() if page.html else ""
+            title = safe_get(page, "title").lower()
+            h = safe_get(page, "html").lower()
             
             # 1. Deteksi Jam Operasional Otomatis (Regex)
             # Mencari teks seperti "Antrean dibuka pukul 08:00" atau "kembali pukul 06"
@@ -266,15 +267,16 @@ def check_quota(page: ChromiumPage, location_id: str, sync_broadcast=None, node_
             if time_match:
                 detected_hour = int(time_match.group(1))
                 logger.info(f"Jam operasional terdeteksi secara otomatis: Jam {detected_hour}")
-                # Kita kirim info jam ini ke loop utama via return khusus atau status
-                # Untuk kesederhanaan, kita bisa simpan di status yang bisa dibaca loop utama
                 page.run_js(f'window.__detected_opening_hour = {detected_hour}')
+                return -5 # CODE -5: Standby Mode (Night Mode)
 
             # 2. Strict CF verification again
             if "just a moment" in title or "verifying your connection" in title or \
                (page.ele('css:iframe[src*="challenges.cloudflare.com"]', timeout=0.5) and "challenges.cloudflare.com" in h):
                 return -2
-            if "/masuk" in page.url or "/login" in page.url or "/home" in page.url:
+            
+            page_url = safe_get(page, "url")
+            if "/masuk" in page_url or "/login" in page_url or "/home" in page_url:
                 return -1
             return 0 
 
@@ -792,7 +794,6 @@ def run_drission_bot_loop(node_id: int, config: Dict[str, Any], sync_broadcast, 
                            kill_targets.append(other_id)
                            
                    for t_id in kill_targets:
-                       # This cancels the asyncio task in the main thread mapping
                        nodes_ref[t_id]["task"].cancel()
                        del nodes_ref[t_id]
                        sync_broadcast(f"[System] 🛑 KILL SWITCH ACTIVATED: Node {t_id} stopped because NIK {nik} already secured a booking.")
@@ -801,51 +802,52 @@ def run_drission_bot_loop(node_id: int, config: Dict[str, Any], sync_broadcast, 
                    sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🔴 SNIPER FAILED: {res.get('error')}")
                    
                 break # Stop looping after sniper execution
+
             elif quota == -1:
                 # Trigger Auto-Login flow
                 auto_login(page, config['email'], config['password'], sync_broadcast, node_id, nama_lengkap)
-                continue # CRITICAL: Bypass Night Mode check after login attempt
-            elif quota == -2:
-                # Cloudflare Turnstile challenge page
-                msg = "🛡️ Cloudflare terdeteksi!"
-                sync_broadcast(f"[Node {node_id}] {msg}")
-                logger.info(msg)
+                continue 
                 
+            elif quota == -2:
+                # Cloudflare challenge
                 solve_cloudflare_cdp(page, logger, sync_broadcast, node_id)
-                continue # CRITICAL: Bypass Night Mode check after challenge attempt
+                continue 
+                
             elif quota == -3:
-                sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] ⛔ PEMBLOKIRAN IP TERDETEKSI! Server Antam memblokir akses sementara karena terlalu banyak request. Bot akan beristirahat selama 3 menit sebelum mencoba lagi...")
-                time.sleep(180) # 3-minute cooldown
+                # IP Blocked
+                sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] ⛔ PEMBLOKIRAN IP TERDETEKSI! Server Antam memblokir akses sementara. Cooldown 3 menit...")
+                time.sleep(180)
                 continue
+                
             elif quota == -4:
-                sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] ⚠️ Browser connection lost! Requesting a fresh browser instance...")
-                try:
-                    page.quit()
-                except:
-                    pass
+                # Crash / Disconnect
+                sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] ⚠️ Browser lost! Requesting fresh instance...")
+                try: page.quit()
+                except: pass
                 time.sleep(2)
                 page = _get_stealth_page(proxy, node_id)
                 continue
-            else:
-                sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🔴 Quota full.")
                 
-            # Deteksi jam operasional secara otomatis dari state browser
-            detected_h = safe_run_js(page, 'return window.__detected_opening_hour')
-            opening_hour = int(detected_h) if detected_h is not None else 8
-            current_hour = datetime.datetime.now().hour
-            
-            if current_hour < opening_hour:
-                sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🌙 Penantian: Butik buka jam {opening_hour} (Sekarang jam {current_hour}). Refresh tiap 5 menit...")
-                time.sleep(300)
-            else:
-                # Normal operational hour delays
-                if quota == -1:
-                    time.sleep(3)
-                elif quota == -2:
-                    time.sleep(5)
+            elif quota == -5:
+                # Night Mode (Wait for opening hour)
+                detected_h = safe_run_js(page, 'return window.__detected_opening_hour')
+                opening_hour = int(detected_h) if detected_h is not None else 8
+                current_hour = datetime.datetime.now().hour
+                
+                if current_hour < opening_hour:
+                    sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🌙 Standby: Butik buka jam {opening_hour} (Sekarang jam {current_hour}). Tidur 5 menit...")
+                    time.sleep(300)
                 else:
-                    sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] Retrying in 10s...")
+                    # Closing in on opening time, faster refresh
+                    sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🕒 Jam buka mendekat ({opening_hour}:00). Standby tiap 10 detik...")
                     time.sleep(10)
+                continue
+                
+            else:
+                # quota == 0 (Quota full or unknown)
+                sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🔴 Quota full. Retrying in 10s...")
+                time.sleep(10)
+                continue
                 
     except Exception as e:
         sync_broadcast(f"[Node {node_id}] 🔴 Critical Thread Error: {str(e)}")
