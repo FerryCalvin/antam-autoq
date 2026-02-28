@@ -59,6 +59,8 @@ LOCATION_CODE_TO_SITE_ID = {
     "YOG-01": "9",   # Butik Emas LM - Yogyakarta
 }
 
+# Jam operasional akan dideteksi secara dinamis dari website
+
 def _get_stealth_page(proxy: str = None, node_id: int = 1) -> ChromiumPage:
     """
     Initializes a DrissionPage ChromiumPage which inherently bypasses Cloudflare
@@ -102,7 +104,33 @@ def _get_stealth_page(proxy: str = None, node_id: int = 1) -> ChromiumPage:
     page.set.timeouts(page_load=15, script=15)
     return page
 
-def check_quota(page: ChromiumPage, location_id: str, target_date: str, sync_broadcast=None, node_id=None, nama=None) -> int:
+def safe_get(page, attr="url", retries=5):
+    """Safely access page properties (url, title, html) with retries for 'The page is refreshed' errors."""
+    for i in range(retries):
+        try:
+            if attr == "url": return page.url
+            if attr == "title": return page.title
+            if attr == "html": return page.html
+        except Exception as e:
+            if "refreshed" in str(e).lower() or "loading" in str(e).lower():
+                time.sleep(1)
+                continue
+            raise e
+    return ""
+
+def safe_run_js(page, script, retries=5):
+    """Safely run JS on page with retries for 'The page is refreshed' errors."""
+    for i in range(retries):
+        try:
+            return page.run_js(script)
+        except Exception as e:
+            if "refreshed" in str(e).lower() or "loading" in str(e).lower():
+                time.sleep(1)
+                continue
+            raise e
+    return None
+
+def check_quota(page: ChromiumPage, location_id: str, sync_broadcast=None, node_id=None, nama=None) -> int:
     """
     Returns the integer quota available (or 1 if ANY slot is found), 0 if none.
     -1 means "Needs Login", -2 means "Cloudflare Active".
@@ -114,16 +142,17 @@ def check_quota(page: ChromiumPage, location_id: str, target_date: str, sync_bro
     url = f"https://antrean.logammulia.com/antrean?site={site_id}"
     
     # --- SMART STATE DETECTION & STATUS REPORTING ---
-    time.sleep(1) # Settle DOM
+    # Robustly handle the DrissionPage refresh exception using safe_get helper
+    title_lower = safe_get(page, "title").lower()
+    html_lower = safe_get(page, "html").lower()
+    page_url = safe_get(page, "url")
+    
     try:
-        title_lower = page.title.lower() if page.title else ""
-        html_lower = page.html.lower() if page.html else ""
-        
-        # Stricter CF Detection: Don't just look at HTML (Rocket Loader false positive), look at Title OR visible challenge iframe
+    # Stricter CF Detection: Don't just look at HTML (Rocket Loader false positive), look at Title OR visible challenge iframe
         is_cf = ("just a moment" in title_lower or "verifying your connection" in title_lower) or \
                 (page.ele('css:iframe[src*="challenges.cloudflare.com"]', timeout=0.5) and "challenges.cloudflare.com" in html_lower)
         
-        is_login = "/masuk" in page.url or "/login" in page.url or "/home" in page.url
+        is_login = "/masuk" in page_url or "/login" in page_url or "/home" in page_url
         is_boutique = "select[name=site]" in html_lower and "tampilkan butik" in html_lower
         is_quota_page = "select#wakda" in html_lower
         is_announcement = page.ele('text:Pengumuman', timeout=0.5) or page.ele('css:.modal-content', timeout=0.5)
@@ -148,6 +177,7 @@ def check_quota(page: ChromiumPage, location_id: str, target_date: str, sync_bro
             logger.info(f"Navigating to {url} to check slots...")
             try:
                 page.get(url, retry=0, timeout=12)
+                page.wait.load_complete(timeout=5) # Ensure stable state
             except:
                 pass 
         else:
@@ -202,7 +232,18 @@ def check_quota(page: ChromiumPage, location_id: str, target_date: str, sync_bro
         if not page.wait.ele_displayed('select#wakda', timeout=15):
             title = page.title.lower() if page.title else ""
             h = page.html.lower() if page.html else ""
-            # Strict CF verification again
+            
+            # 1. Deteksi Jam Operasional Otomatis (Regex)
+            # Mencari teks seperti "Antrean dibuka pukul 08:00" atau "kembali pukul 06"
+            time_match = re.search(r'pukul\s*(\d{1,2})[:.]?(\d{0,2})', h)
+            if time_match:
+                detected_hour = int(time_match.group(1))
+                logger.info(f"Jam operasional terdeteksi secara otomatis: Jam {detected_hour}")
+                # Kita kirim info jam ini ke loop utama via return khusus atau status
+                # Untuk kesederhanaan, kita bisa simpan di status yang bisa dibaca loop utama
+                page.run_js(f'window.__detected_opening_hour = {detected_hour}')
+
+            # 2. Strict CF verification again
             if "just a moment" in title or "verifying your connection" in title or \
                (page.ele('css:iframe[src*="challenges.cloudflare.com"]', timeout=0.5) and "challenges.cloudflare.com" in h):
                 return -2
@@ -213,6 +254,9 @@ def check_quota(page: ChromiumPage, location_id: str, target_date: str, sync_bro
         if sync_broadcast and node_id:
             sync_broadcast(f"[Node {node_id}] [{nama or 'Bot'}] ⏳ Extracting slots from dropdown...")
             
+        # Jika berhasil sampai sini, hapus deteksi jam karena sudah buka
+        page.run_js('window.__detected_opening_hour = null')
+
         select_wakda = page.ele('select#wakda')
         options = select_wakda.eles('tag:option')
         available_slots = []
@@ -308,9 +352,10 @@ def solve_cloudflare_cdp(page: ChromiumPage, logger_obj=logger, sync_broadcast=N
     4. Fire Input.dispatchMouseEvent (generates isTrusted:true click).
     """
     try:
-        # STRICTOR DETECTION: Use Title + visible indicator
-        title = page.title.lower() if page.title else ""
-        html = page.html.lower() if page.html else ""
+        # --- SAFE ACCESS PAGE PROPERTIES ---
+        title = safe_get(page, "title").lower()
+        html = safe_get(page, "html").lower()
+            
         is_active_cf = "just a moment" in title or "verifying your connection" in title or \
                        (page.ele('css:iframe[src*="challenges.cloudflare.com"]', timeout=0.5) and "challenges.cloudflare.com" in html)
 
@@ -417,132 +462,6 @@ def solve_cloudflare_cdp(page: ChromiumPage, logger_obj=logger, sync_broadcast=N
         return False
 
 
-def solve_cloudflare_api(page: ChromiumPage, logger_obj=logger, sync_broadcast=None, node_id=None, api_key: str = None) -> bool:
-    """
-    Ultimate Headless Turnstile Bypass using 2Captcha API.
-    1. Extracts the sitekey from the Cloudflare iframe or page DOM.
-    2. Sends it to 2Captcha.
-    3. Waits for the token.
-    4. Injects it back into `<input name=\"cf-turnstile-response\">`
-    """
-    if not api_key:
-        msg = "⚠️ 2Captcha API Key is missing! Cannot auto-solve Cloudflare."
-        logger_obj.error(msg)
-        if sync_broadcast and node_id:
-            sync_broadcast(f"[Node {node_id}] {msg}")
-        return False
-
-    try:
-        msg = "🔍 Sedang mengekstrak Cloudflare Sitekey..."
-        logger_obj.info(msg)
-        
-        # Method 1: Look for Turnstile div
-        sitekey = None
-        turnstile_div = page.ele('.cf-turnstile', timeout=2)
-        if turnstile_div:
-            sitekey = turnstile_div.attr('data-sitekey')
-            
-        # Method 2: Regex script tags if it's rendered globally
-        if not sitekey:
-            html = page.html
-            match = re.search(r'data-sitekey=["\'](.*?)["\']', html)
-            if match:
-                sitekey = match.group(1)
-                
-        # Method 3: Default Antam Sitekey (Hardcoded fallback as it rarely changes)
-        if not sitekey:
-            logger_obj.warning("Could not extract sitekey from DOM. Using known Antam Sitekey.")
-            # 0x4AAAAAAAB-Q2d9X_4hOh0D is a common placeholder, but Turnstile requires the actual public key
-            # If we fail to find it, the API will reject it. We must abort if we don't have it.
-            msg = "❌ Gagal menemukan Sitekey Cloudflare di halaman ini."
-            logger_obj.error(msg)
-            return False
-            
-        page_url = page.url
-        msg = f"⏳ Meminta token Turnstile dari 2Captcha (Sitekey: {sitekey[:8]}...)"
-        logger_obj.info(msg)
-        if sync_broadcast and node_id:
-            sync_broadcast(f"[Node {node_id}] {msg}")
-            
-        # 1. Submit the task
-        with httpx.Client() as client:
-            submit_payload = {
-                "key": api_key,
-                "method": "turnstile",
-                "sitekey": sitekey,
-                "pageurl": page_url,
-                "json": 1
-            }
-            res = client.post("https://2captcha.com/in.php", data=submit_payload, timeout=10)
-            data = res.json()
-            if data.get("status") != 1:
-                logger_obj.error(f"2Captcha Submit Error: {data.get('request')}")
-                return False
-                
-            task_id = data.get("request")
-            
-        # 2. Poll for the result
-        msg = f"🕒 Menunggu 2Captcha menyelesaikan tantangan (Task ID: {task_id})..."
-        logger_obj.info(msg)
-        
-        token = None
-        for i in range(25): # Poll for up to 125 seconds (Turnstile usually takes 5-20s)
-            time.sleep(5)
-            with httpx.Client() as client:
-                poll_payload = {
-                    "key": api_key,
-                    "action": "get",
-                    "id": task_id,
-                    "json": 1
-                }
-                res = client.get("https://2captcha.com/res.php", params=poll_payload, timeout=10)
-                data = res.json()
-                
-                if data.get("status") == 1:
-                    token = data.get("request")
-                    break
-                elif data.get("request") != "CAPCHA_NOT_READY":
-                    logger_obj.error(f"2Captcha Polling Error: {data.get('request')}")
-                    return False
-                    
-        if not token:
-            logger_obj.error("🕒 2Captcha Time Out. Token not received.")
-            return False
-            
-        msg = "✅ Token Turnstile diterima! Menyuntikkan ke browser..."
-        logger_obj.info(msg)
-        if sync_broadcast and node_id:
-            sync_broadcast(f"[Node {node_id}] {msg}")
-            
-        # 3. Inject token into DOM so Cloudflare registers it
-        page.run_js(f'''
-            let cf_inputs = document.querySelectorAll('input[name="cf-turnstile-response"]');
-            cf_inputs.forEach(input => {{
-                input.value = "{token}";
-            }});
-            
-            // If there's an invisible callback in Turnstile, attempt to call it directly
-            // Oftentimes just setting the value and clicking the submit button is enough
-        ''')
-        
-        time.sleep(1)
-        
-        # 4. Attempt to trigger the page's original submit or let nature take its course
-        # Antam usually auto-submits once the cf-turnstile-response input has a value,
-        # but just in case, we try clicking the primary submit button if visible
-        try:
-            submit_btn = page.ele('tag:button@@type=submit', timeout=1)
-            if submit_btn:
-                submit_btn.click(by_js=True)
-        except:
-            pass
-            
-        time.sleep(5)
-        return True
-        
-    except Exception as e:
-        logger_obj.error(f"Error solving Turnstile via API: {e}")
-        return False
 
 
 def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, node_id: int, nama: str) -> bool:
@@ -638,11 +557,12 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
         time.sleep(4) # Let cookie sink into DrissionPage
         
         # Only verify success if the password field is no longer on the screen
+        page_url = safe_get(page, "url")
         if not page.ele('css:input[type="password"]', timeout=2):
             sync_broadcast(f"[Node {node_id}] [{nama}] ✅ Auto-Login Successful! Returning to Quota Target...")
             
             # If immediately dumped to the profile page, proactively redirect to the queue page
-            if "/users" in page.url:
+            if "/users" in page_url:
                 menu_btn = page.ele('text:Menu Antrean', timeout=2)
                 if menu_btn and str(menu_btn.tag) != 'NoneElement':
                     menu_btn.click()
@@ -657,7 +577,7 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
         sync_broadcast(f"[Node {node_id}] [{nama}] ⚠️ Login automation error: {e}")
         return False
 
-def submit_booking(page: ChromiumPage, profile_data: Dict[str, str], location_id: str, target_date: str) -> Dict[str, Any]:
+def submit_booking(page: ChromiumPage, profile_data: Dict[str, str], location_id: str) -> Dict[str, Any]:
     url = f"https://antrean.logammulia.com/antrean?site={location_id}"
     logger.info(f"[SNIPER] Starting sequence for {profile_data.get('nama_lengkap', 'Unknown')} at {location_id}")
     
@@ -712,23 +632,29 @@ def submit_booking(page: ChromiumPage, profile_data: Dict[str, str], location_id
             
         logger.info(f"[SNIPER] Selected slot value: {target_wakda_value}")
         
-        # 3. Fill the dropdown
-        select_wakda.select(target_wakda_value)
-        
-        # 4. Fill the inputs
-        # Note: adjust selectors if the actual site uses different name attributes
+        # 3. Fill the inputs (INSTANT INJECTION MODE)
+        logger.info("[SNIPER] Mengisi formulir secara instan...")
         try:
-             nama_input = page.ele('@name=nama')
-             if nama_input: nama_input.input(profile_data.get('nama_lengkap', ''))
-             
-             nik_input = page.ele('@name=nik')
-             if nik_input: nik_input.input(profile_data.get('nik', ''))
-             
-             phone_input = page.ele('@name=phone')
-             if phone_input: phone_input.input(profile_data.get('no_hp', ''))
-             
-             email_input = page.ele('@name=email')
-             if email_input: email_input.input(profile_data.get('email', ''))
+            # Gunakan JavaScript untuk mengisi semua field sekaligus agar jauh lebih cepat dibanding mengetik manual
+            form_payload = {
+                "nama": profile_data.get('nama_lengkap', ''),
+                "nik": profile_data.get('nik', ''),
+                "phone": profile_data.get('no_hp', ''),
+                "email": profile_data.get('email', '')
+            }
+            
+            page.run_js(f'''
+                var data = {form_payload};
+                for (var key in data) {{
+                    var el = document.querySelector('[name="' + key + '"]');
+                    if (el) {{
+                        var nativeSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+                        nativeSetter.call(el, data[key]);
+                        el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                        el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                    }}
+                }}
+            ''')
         except Exception as e:
              logger.warning(f"[SNIPER] Error filling input fields automatically: {e}")
 
@@ -763,8 +689,8 @@ def submit_booking(page: ChromiumPage, profile_data: Dict[str, str], location_id
             ticket_dir = os.path.join(os.getcwd(), "tickets")
             os.makedirs(ticket_dir, exist_ok=True)
             safe_name = profile_data.get('nik', 'unknown').replace(" ", "_")
-            safe_date = target_date.replace("-", "")
-            screenshot_filename = f"TICKET_{safe_name}_{safe_date}_{location_id}.png"
+            current_date_str = datetime.datetime.now().strftime('%Y%p%d')
+            screenshot_filename = f"TICKET_{safe_name}_{current_date_str}_{location_id}.png"
             screenshot_path = os.path.join(ticket_dir, screenshot_filename)
             
             time.sleep(2) # Wait for render
@@ -788,7 +714,6 @@ def run_drission_bot_loop(node_id: int, config: Dict[str, Any], sync_broadcast, 
     Uses ChromiumPage which completely evades Cloudflare by not using DevTools Protocol.
     """
     target_location = config['target_location']
-    target_date = config['target_date']
     proxy = config.get('proxy')
     nama_lengkap = config['nama_lengkap']
     
@@ -803,7 +728,7 @@ def run_drission_bot_loop(node_id: int, config: Dict[str, Any], sync_broadcast, 
                 sync_broadcast(f"[Node {node_id}] Thread gracefully exiting...")
                 break
                 
-            quota = check_quota(page, target_location, target_date, sync_broadcast, node_id, nama_lengkap)
+            quota = check_quota(page, target_location, sync_broadcast, node_id, nama_lengkap)
             
             if quota > 0:
                 sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🟢 SUCCESS: Found {quota} slots! Triggering Sniper...")
@@ -813,7 +738,7 @@ def run_drission_bot_loop(node_id: int, config: Dict[str, Any], sync_broadcast, 
                     "no_hp": config['no_hp'],
                     "email": config['email']
                 }
-                res = submit_booking(page, config_payload, target_location, target_date)
+                res = submit_booking(page, config_payload, target_location)
                 
                 if res.get("success"):
                    sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🏆 BOOKING SUCCESSFUL! URL: {res.get('url')}")
@@ -845,14 +770,7 @@ def run_drission_bot_loop(node_id: int, config: Dict[str, Any], sync_broadcast, 
                 
                 # Strategy 1: CDP Input.dispatchMouseEvent (FREE, no API, multi-bot capable!)
                 cdp_success = solve_cloudflare_cdp(page, logger, sync_broadcast, node_id)
-                
-                if not cdp_success:
-                    # Strategy 2: Fall back to 2Captcha API if user has a key
-                    api_key = config.get('captcha_api_key')
-                    if api_key:
-                        msg = "🔄 CDP bypass gagal. Mencoba 2Captcha API..."
-                        sync_broadcast(f"[Node {node_id}] {msg}")
-                        solve_cloudflare_api(page, logger, sync_broadcast, node_id, api_key=api_key)
+                # No fallback to 2Captcha as requested
             elif quota == -3:
                 sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] ⛔ PEMBLOKIRAN IP TERDETEKSI! Server Antam memblokir akses sementara karena terlalu banyak request. Bot akan beristirahat selama 3 menit sebelum mencoba lagi...")
                 time.sleep(180) # 3-minute cooldown
@@ -869,10 +787,13 @@ def run_drission_bot_loop(node_id: int, config: Dict[str, Any], sync_broadcast, 
             else:
                 sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🔴 Quota full.")
                 
-            # Smart Idle check applied to non-critical loops (quota 0, -1, -2)
+            # Deteksi jam operasional secara otomatis dari state browser
+            detected_h = safe_run_js(page, 'return window.__detected_opening_hour')
+            opening_hour = int(detected_h) if detected_h is not None else 8
             current_hour = datetime.datetime.now().hour
-            if current_hour < 7:
-                sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🌙 Smart Idle: Antrean belum buka (Jam {current_hour}). Refresh setiap 5 menit...")
+            
+            if current_hour < opening_hour:
+                sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🌙 Penantian: Butik buka jam {opening_hour} (Sekarang jam {current_hour}). Refresh tiap 5 menit...")
                 time.sleep(300)
             else:
                 # Normal operational hour delays

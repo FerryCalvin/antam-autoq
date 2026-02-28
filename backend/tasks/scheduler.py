@@ -22,7 +22,7 @@ async def get_bot_config(session) -> BotConfig | None:
     result = await session.execute(select(BotConfig))
     return result.scalars().first()
 
-async def run_tracker_and_sniper(target_date: str):
+async def run_tracker_and_sniper():
     """
     Main loop iteration:
     1. Checks quota for active locations.
@@ -39,14 +39,14 @@ async def run_tracker_and_sniper(target_date: str):
             return
 
         for location in locations:
-            logger.info(f"Checking quota for {location.nama_cabang} ({location.api_location_id}) on {target_date}...")
-            quota = await check_quota(location.api_location_id, target_date)
+            logger.info(f"Checking quota for {location.nama_cabang} ({location.api_location_id})...")
+            quota = await check_quota(location.api_location_id)
             
             logger.info(f"Quota for {location.api_location_id}: {quota}")
             
             if quota > 0:
                 # Notify Telegram
-                msg = f"🟢 SLOT OPEN! Quota: {quota} at {location.nama_cabang} for {target_date}.\nExecuting Sniper..."
+                msg = f"🟢 SLOT OPEN! Quota: {quota} at {location.nama_cabang}.\nExecuting Sniper..."
                 logger.info(msg)
                 if config:
                     await send_telegram_alert(config.telegram_bot_token, config.telegram_chat_id, msg)
@@ -54,7 +54,7 @@ async def run_tracker_and_sniper(target_date: str):
                 # Execute sniper for all active profiles
                 for profile in profiles:
                     logger.info(f"Submitting booking for {profile.nama_lengkap} at {location.nama_cabang}...")
-                    result = await submit_booking(profile, location, target_date)
+                    result = await submit_booking(profile, location)
                     
                     status = "SUCCESS" if result.get("success") else "FAILED"
                     
@@ -62,7 +62,6 @@ async def run_tracker_and_sniper(target_date: str):
                     log_entry = BookingLog(
                         profile_id=profile.id,
                         location_id=location.id,
-                        target_date=target_date,
                         status=status,
                         response_payload=str(result)
                     )
@@ -76,7 +75,7 @@ async def run_tracker_and_sniper(target_date: str):
                         
                 await session.commit()
 
-async def start_scheduler(target_date: str):
+async def start_scheduler():
     """
     Continuously runs the tracker logic with the configured delay.
     """
@@ -89,7 +88,7 @@ async def start_scheduler(target_date: str):
                 config = await get_bot_config(session)
                 delay = config.request_delay_seconds if config else 60
                 
-            await run_tracker_and_sniper(target_date)
+            await run_tracker_and_sniper()
             
             logger.info(f"Sleeping for {delay} seconds before next check...")
             await asyncio.sleep(delay)

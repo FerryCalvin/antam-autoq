@@ -45,10 +45,15 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Antam Auto-Queue Web Control Panel", lifespan=lifespan)
 bot_manager = BotManager(ws_manager)
 
-# Disable CORS restrictions for React default Vite port
+# Disable CORS restrictions
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000", "*"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -67,9 +72,7 @@ class AccountNodeCreate(BaseModel):
     email: str
     password: str
     target_location: str
-    target_date: str
     proxy: Optional[str] = None
-    captcha_api_key: Optional[str] = None
 
 class AccountNodeUpdate(BaseModel):
     nama_lengkap: Optional[str] = None
@@ -78,9 +81,7 @@ class AccountNodeUpdate(BaseModel):
     email: Optional[str] = None
     password: Optional[str] = None
     target_location: Optional[str] = None
-    target_date: Optional[str] = None
     proxy: Optional[str] = None
-    captcha_api_key: Optional[str] = None
 
 class AccountNodeResponse(AccountNodeCreate):
     id: int
@@ -154,9 +155,7 @@ async def api_start_node(node_id: int, db: AsyncSession = Depends(get_db)):
         "email": db_node.email,
         "password": db_node.password,
         "target_location": db_node.target_location,
-        "target_date": db_node.target_date,
-        "proxy": db_node.proxy,
-        "captcha_api_key": getattr(db_node, "captcha_api_key", None)
+        "proxy": db_node.proxy
     })
     db_node.is_active = True
     db_node.status_message = "Hunting"
