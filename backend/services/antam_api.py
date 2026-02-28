@@ -184,6 +184,9 @@ def check_quota(page: ChromiumPage, location_id: str, sync_broadcast=None, node_
         is_quota_page = "select#wakda" in html_lower
         is_announcement = page.ele('text:Pengumuman', timeout=0.5) or page.ele('css:.modal-content', timeout=0.5)
         
+        # ACTIVE PAGE GUARD: If we are on login or boutique selection, we are NOT in night mode.
+        is_active_page = is_login or is_boutique
+        
         # --- DYNAMIC STATUS REPORTING (ADAPTIVE LOGS) ---
         if sync_broadcast and node_id:
             if is_cf:
@@ -275,10 +278,10 @@ def check_quota(page: ChromiumPage, location_id: str, sync_broadcast=None, node_
             h = safe_get(page, "html").lower()
             
             # 1. Deteksi Jam Operasional Otomatis (Regex)
-            # Mencari teks seperti "Antrean dibuka pukul 08:00" atau "kembali pukul 06"
-            time_match = re.search(r'pukul\s*(\d{1,2})[:.]?(\d{0,2})', h)
-            if time_match:
-                detected_hour = int(time_match.group(1))
+            # Mencari teks spesifik yang menunjukkan antrean ditutup
+            target_text = re.search(r'(antrean\s+dibuka|kembali)\s+pukul\s*(\d{1,2})[:.]?(\d{0,2})', h)
+            if target_text and not is_active_page:
+                detected_hour = int(target_text.group(2))
                 logger.info(f"Jam operasional terdeteksi secara otomatis: Jam {detected_hour}")
                 page.run_js(f'window.__detected_opening_hour = {detected_hour}')
                 return -5 # CODE -5: Standby Mode (Night Mode)
