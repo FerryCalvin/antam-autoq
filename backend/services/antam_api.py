@@ -102,7 +102,7 @@ def _get_stealth_page(proxy: str = None, node_id: int = 1) -> ChromiumPage:
     page.set.timeouts(page_load=15, script=15)
     return page
 
-def check_quota(page: ChromiumPage, location_id: str, target_date: str) -> int:
+def check_quota(page: ChromiumPage, location_id: str, target_date: str, sync_broadcast=None, node_id=None, nama=None) -> int:
     """
     Returns the integer quota available (or 1 if ANY slot is found), 0 if none.
     -1 means "Needs Login", -2 means "Cloudflare Active".
@@ -112,139 +112,121 @@ def check_quota(page: ChromiumPage, location_id: str, target_date: str) -> int:
     logger.info(f"Translating location '{location_id}' -> site_id '{site_id}'")
     
     url = f"https://antrean.logammulia.com/antrean?site={site_id}"
-    logger.info(f"Navigating to {url} to check slots...")
-
+    
+    # --- SMART STATE DETECTION & STATUS REPORTING ---
+    time.sleep(1) # Settle DOM
     try:
-        # Navigate directly to the queuing page
-        try:
-            page.get(url, retry=0, timeout=15)
-        except Exception:
-            pass # Timeout is normal if Cloudflare delays loading; we let post-checks handle it
-            
+        title_lower = page.title.lower() if page.title else ""
+        html_lower = page.html.lower() if page.html else ""
+        
+        # Stricter CF Detection: Don't just look at HTML (Rocket Loader false positive), look at Title OR visible challenge iframe
+        is_cf = ("just a moment" in title_lower or "verifying your connection" in title_lower) or \
+                (page.ele('css:iframe[src*="challenges.cloudflare.com"]', timeout=0.5) and "challenges.cloudflare.com" in html_lower)
+        
+        is_login = "/masuk" in page.url or "/login" in page.url or "/home" in page.url
+        is_boutique = "select[name=site]" in html_lower and "tampilkan butik" in html_lower
+        is_quota_page = "select#wakda" in html_lower
+        is_announcement = page.ele('text:Pengumuman', timeout=0.5) or page.ele('css:.modal-content', timeout=0.5)
+        
+        # --- DYNAMIC STATUS REPORTING (ADAPTIVE LOGS) ---
+        if sync_broadcast and node_id:
+            if is_cf:
+                sync_broadcast(f"[Node {node_id}] [{nama or 'Bot'}] 🛡️ Cloudflare challenge active (Title: {page.title}).")
+            elif is_announcement:
+                sync_broadcast(f"[Node {node_id}] [{nama or 'Bot'}] 📢 Announcement Pop-up detected.")
+            elif is_login:
+                sync_broadcast(f"[Node {node_id}] [{nama or 'Bot'}] 🔑 On Login/Home page.")
+            elif is_boutique:
+                sync_broadcast(f"[Node {node_id}] [{nama or 'Bot'}] 🏬 On Boutique Selection page.")
+            elif is_quota_page:
+                sync_broadcast(f"[Node {node_id}] [{nama or 'Bot'}] ✅ On Quota Selection page.")
+
+        # --- SMART NAVIGATION ---
+        # ONLY navigate if we are totally lost (not on any of the above pages)
+        # We also check if we are on a login or boutique page - if so, we DON'T reload.
+        if not (is_cf or is_login or is_boutique or is_quota_page):
+            logger.info(f"Navigating to {url} to check slots...")
+            try:
+                page.get(url, retry=0, timeout=12)
+            except:
+                pass 
+        else:
+            logger.info(f"Adaptive: State recognized as {page.url}. No reload needed.")
+
         # --- IP BLOCK AUTO-COOLDOWN BUSTER ---
         if page.ele('text:pemblokiran IP', timeout=1) or page.ele('text:An Error Was Encountered', timeout=1):
-            logger.warning("IP Ban / Rate Limit Detected!")
+            if sync_broadcast and node_id:
+                sync_broadcast(f"[Node {node_id}] [{nama or 'Bot'}] ⛔ IP Blocked/Limit detected.")
             return -3
             
         # --- BOUTIQUE AUTO-SELECTION BUSTER ---
-        # The user might be dumped on the intermediate Boutique Selection page.
-        try:
-            # Check if we are on the Boutique Selection page using JS (avoids NoneElement issues)
-            is_boutique_page = page.run_js(
-                'return !!(document.querySelector("select[name=site]") && '
-                'document.querySelector("button") && '
-                'document.body.innerText.includes("Tampilkan Butik"))'
-            )
-            if is_boutique_page:
-                logger.info(f"Pre-flight: Selecting target BELM site_id='{site_id}' via Vue-aware JS...")
-                
-                # Use the native HTMLSelectElement prototype setter to trigger Vue.js v-model reactivity.
-                # Vue 2 intercepts the native setter via Object.defineProperty, and Vue 3 via Proxy.
-                # Simply setting `.value` on the element directly does NOT trigger the setter.
-                # We must use the ORIGINAL native setter from the prototype chain.
-                page.run_js(f'''
-                    var sel = document.querySelector('select[name="site"]');
-                    if (sel) {{
-                        // Use the native setter from the HTMLSelectElement prototype
-                        var nativeSetter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set;
-                        nativeSetter.call(sel, '{site_id}');
-                        
-                        // Dispatch events that Vue.js v-model listens for
-                        sel.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                        sel.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                    }}
-                ''')
-                
-                time.sleep(1)  # Let Vue process the change
-                
-                # Verify the selection actually took effect
-                verify_js = 'var s=document.querySelector("select[name=site]"); return s ? s.value : "";'
-
-                current_val = page.run_js(verify_js)
-
-                logger.info(f"Dropdown value after JS injection: '{current_val}'")
-                
-                # Check if Cloudflare Turnstile is present and find the submit button
-                # We find the button here (AFTER confirming we're on the boutique page) to avoid NoneElement issues
-                submit_btn = page.ele('tag:button@@text():Tampilkan Butik', timeout=2)
-                cf_input = page.ele('css:input[name="cf-turnstile-response"]', timeout=1)
-                
-                if cf_input and hasattr(cf_input, 'attr'):
-                    logger.info("Waiting up to 15s for Cloudflare Turnstile token...")
-                    for _ in range(15):
-                        try:
-                            token_val = cf_input.attr('value') or cf_input.value
-                        except:
-                            token_val = None
-                        if token_val:
-                            logger.info("Turnstile generated token! Auto-clicking Tampilkan Butik...")
-                            if submit_btn and hasattr(submit_btn, 'click'):
-                                submit_btn.click()  # Native isTrusted click
-                            else:
-                                page.run_js('document.querySelector("button[type=submit]").click()')
-                            page.wait.load_start(timeout=5)
-                            break
-                        time.sleep(1)
-                    else:
-                        logger.warning("Turnstile token not generated in 15s, clicking anyway...")
-                        if submit_btn and hasattr(submit_btn, 'click'):
-                            submit_btn.click()
-                        else:
-                            page.run_js('document.querySelector("button[type=submit]").click()')
+        is_boutique_page = page.run_js(
+            'return !!(document.querySelector("select[name=site]") && '
+            'document.querySelector("button") && '
+            'document.body.innerText.includes("Tampilkan Butik"))'
+        )
+        if is_boutique_page:
+            logger.info(f"Pre-flight: Selecting target BELM site_id='{site_id}'...")
+            page.run_js(f'''
+                var sel = document.querySelector('select[name="site"]');
+                if (sel) {{
+                    var nativeSetter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set;
+                    nativeSetter.call(sel, '{site_id}');
+                    sel.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                    sel.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                }}
+            ''')
+            time.sleep(1)
+            submit_btn = page.ele('tag:button@@text():Tampilkan Butik', timeout=2)
+            cf_input = page.ele('css:input[name="cf-turnstile-response"]', timeout=1)
+            if cf_input and hasattr(cf_input, 'attr'):
+                for _ in range(15):
+                    if cf_input.attr('value') or cf_input.value:
+                        if submit_btn: submit_btn.click()
                         page.wait.load_start(timeout=5)
-                else:
-                    logger.info("No Turnstile detected, clicking Tampilkan Butik directly...")
-                    if submit_btn and hasattr(submit_btn, 'click'):
-                        submit_btn.click()  # Native isTrusted click
-                    else:
-                        page.run_js('document.querySelector("button[type=submit]").click()')
-                    page.wait.load_start(timeout=5)
-        except Exception as e:
-            logger.warning(f"Boutique auto-selection error: {e}")
+                        break
+                    time.sleep(1)
+            elif submit_btn:
+                submit_btn.click()
+                page.wait.load_start(timeout=5)
 
-        # Post-navigation check
+        # Final checks
         if "/masuk" in page.url or "/login" in page.url or "/home" in page.url:
             return -1
-            
-        # Post-login redirect trap check: the user might be dumped on the /users profile page
         if "/users" in page.url:
-            logger.info("Redirected to /users profile page. Looking for 'Menu Antrean' button...")
             menu_btn = page.ele('text:Menu Antrean', timeout=2)
             if menu_btn and str(menu_btn.tag) != 'NoneElement':
                 menu_btn.click()
                 page.wait.load_start(timeout=5)
             
-        # Wait for the select box (wakda / quota options)
         if not page.wait.ele_displayed('select#wakda', timeout=15):
+            title = page.title.lower() if page.title else ""
+            h = page.html.lower() if page.html else ""
+            # Strict CF verification again
+            if "just a moment" in title or "verifying your connection" in title or \
+               (page.ele('css:iframe[src*="challenges.cloudflare.com"]', timeout=0.5) and "challenges.cloudflare.com" in h):
+                return -2
             if "/masuk" in page.url or "/login" in page.url or "/home" in page.url:
                 return -1
-            return -2
+            return 0 
 
-        # DrissionPage makes DOM extraction very easy
+        if sync_broadcast and node_id:
+            sync_broadcast(f"[Node {node_id}] [{nama or 'Bot'}] ⏳ Extracting slots from dropdown...")
+            
         select_wakda = page.ele('select#wakda')
         options = select_wakda.eles('tag:option')
-        
         available_slots = []
         for index, opt in enumerate(options):
-            if index == 0 or not opt.attr('value'):
-                continue
-                
-            # Check if it lacks the 'disabled' attribute
-            if not opt.attr('disabled'):
+            if index > 0 and opt.attr('value') and not opt.attr('disabled'):
                 available_slots.append({'value': opt.attr('value'), 'text': opt.text})
         
-        if available_slots:
-            logger.info(f"Available slots found: {available_slots}")
-            return len(available_slots) 
-        else:
-            logger.info("No available slots found (all options disabled).")
-            return 0
+        return len(available_slots) if available_slots else 0
             
     except Exception as e:
-        logger.error(f"Error checking quota via DrissionPage: {e}")
+        logger.error(f"Error checking quota: {e}")
         error_str = str(e).lower()
         if "disconnected" in error_str or "targetclosed" in error_str:
-            return -4  # Signal the main loop that the browser crashed/disconnected
+            return -4
         return 0
 
 
@@ -326,29 +308,42 @@ def solve_cloudflare_cdp(page: ChromiumPage, logger_obj=logger, sync_broadcast=N
     4. Fire Input.dispatchMouseEvent (generates isTrusted:true click).
     """
     try:
+        # STRICTOR DETECTION: Use Title + visible indicator
+        title = page.title.lower() if page.title else ""
+        html = page.html.lower() if page.html else ""
+        is_active_cf = "just a moment" in title or "verifying your connection" in title or \
+                       (page.ele('css:iframe[src*="challenges.cloudflare.com"]', timeout=0.5) and "challenges.cloudflare.com" in html)
+
+        if not is_active_cf:
+            logger_obj.info("✅ Cloudflare challenge not active (Title check passed). Skipping CDP.")
+            return True
+
         msg = "🔍 Mencari iframe Cloudflare Turnstile via CDP..."
-        logger_obj.info(msg)
-        if sync_broadcast and node_id:
-            sync_broadcast(f"[Node {node_id}] {msg}")
 
-        # Step 1: Enable DOM and find the Turnstile iframe
+        # Step 1: Enable DOM and find the Turnstile iframe (with retry)
         page.run_cdp('DOM.enable')
-        result = page.run_cdp('DOM.getFlattenedDocument', depth=-1, pierce=True)
-        nodes = result.get('nodes', [])
-
+        
         iframe_node = None
-        for node in nodes:
-            if node.get('nodeName') == 'IFRAME':
-                attrs = node.get('attributes', [])
-                for i in range(0, len(attrs), 2):
-                    if attrs[i] == 'src' and 'challenges.cloudflare.com' in attrs[i + 1]:
-                        iframe_node = node
+        for attempt in range(15): # Retry for up to 15 seconds
+            result = page.run_cdp('DOM.getFlattenedDocument', depth=-1, pierce=True)
+            nodes = result.get('nodes', [])
+
+            for node in nodes:
+                if node.get('nodeName') == 'IFRAME':
+                    attrs = node.get('attributes', [])
+                    for i in range(0, len(attrs), 2):
+                        if attrs[i] == 'src' and 'challenges.cloudflare.com' in attrs[i + 1]:
+                            iframe_node = node
+                            break
+                    if iframe_node:
                         break
-                if iframe_node:
-                    break
+            
+            if iframe_node:
+                break
+            time.sleep(1)
 
         if not iframe_node:
-            msg = "❌ Iframe Cloudflare Turnstile tidak ditemukan di DOM."
+            msg = "❌ Iframe Cloudflare Turnstile tidak ditemukan di DOM setelah 15 detik."
             logger_obj.warning(msg)
             if sync_broadcast and node_id:
                 sync_broadcast(f"[Node {node_id}] {msg}")
@@ -404,6 +399,9 @@ def solve_cloudflare_cdp(page: ChromiumPage, logger_obj=logger, sync_broadcast=N
                 logger_obj.info(msg)
                 if sync_broadcast and node_id:
                     sync_broadcast(f"[Node {node_id}] {msg}")
+                
+                # Settle down for 5 seconds to let redirects or page state update
+                time.sleep(5)
                 return True
 
         msg = "❌ Semua CDP click ratios gagal melewati Cloudflare."
@@ -549,7 +547,7 @@ def solve_cloudflare_api(page: ChromiumPage, logger_obj=logger, sync_broadcast=N
 
 def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, node_id: int, nama: str) -> bool:
     """Automates the login sequence if the bot gets redirected to /masuk."""
-    sync_broadcast(f"[Node {node_id}] [{nama}] 🔑 Redirected to Login form. Starting Auto-Login...")
+    sync_broadcast(f"[Node {node_id}] [{nama}] 🤖 Handling Auto-Login sequence...")
     try:
         # Handle the /home redirect trap
         if "/home" in page.url or page.url.rstrip('/') == "https://antrean.logammulia.com":
@@ -561,19 +559,35 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
             else:
                 page.get("https://antrean.logammulia.com/login", retry=0, timeout=15)
                 
-        # ⏳ Wait up to 60 seconds for the password input to appear in the DOM
-        sync_broadcast(f"[Node {node_id}] [{nama}] 🛡️ Waiting up to 60s for Cloudflare/Splash Form to appear...")
-        pass_inp = page.ele('css:input[type="password"]', timeout=60)
         
-        # Try to close any overlaying Splash Screen if one appears on the Login page
-        try:
-            splash_close = page.ele('text:Tutup', timeout=1) or page.ele('css:.close', timeout=1)
-            if splash_close and splash_close.is_displayed():
-                splash_close.click() # Native click
-                time.sleep(1)
-        except:
-            pass
+        pass_inp = None
+        for _ in range(30): # 30 iterations of 2s = 60s
+            pass_inp = page.ele('css:input[type="password"]', timeout=2)
+            if pass_inp:
+                break
             
+            # Proactive Cloudflare detection during the wait
+            # STRICTOR DETECTION: Use Title + visible indicator
+            title = page.title.lower() if page.title else ""
+            html = page.html.lower() if page.html else ""
+            is_active_cf = "just a moment" in title or "verifying your connection" in title or \
+                           (page.ele('css:iframe[src*="challenges.cloudflare.com"]', timeout=0.5) and "challenges.cloudflare.com" in html)
+
+            if is_active_cf:
+                sync_broadcast(f"[Node {node_id}] [{nama}] 🛡️ Cloudflare detected during login wait. Attempting CDP bypass...")
+                solve_cloudflare_cdp(page, logger, sync_broadcast, node_id)
+                time.sleep(2)
+                continue
+            
+            # Try to close any overlaying Splash Screen
+            try:
+                splash_close = page.ele('text:Tutup', timeout=1) or page.ele('css:.close', timeout=1)
+                if splash_close and splash_close.is_displayed():
+                    splash_close.click()
+                    time.sleep(1)
+            except:
+                pass
+
         if not pass_inp:
             sync_broadcast(f"[Node {node_id}] [{nama}] ❌ Timeout! Cloudflare took too long or form not found. Restarting loop...")
             try:
@@ -789,9 +803,7 @@ def run_drission_bot_loop(node_id: int, config: Dict[str, Any], sync_broadcast, 
                 sync_broadcast(f"[Node {node_id}] Thread gracefully exiting...")
                 break
                 
-            sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] ⏳ Checking quota for {target_location} (Proxy: {proxy or 'None'})")
-            
-            quota = check_quota(page, target_location, target_date)
+            quota = check_quota(page, target_location, target_date, sync_broadcast, node_id, nama_lengkap)
             
             if quota > 0:
                 sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🟢 SUCCESS: Found {quota} slots! Triggering Sniper...")
