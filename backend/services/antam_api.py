@@ -163,6 +163,9 @@ def check_quota(page: ChromiumPage, location_id: str, sync_broadcast=None, node_
     site_id = LOCATION_CODE_TO_SITE_ID.get(location_id, location_id)
     logger.info(f"Translating location '{location_id}' -> site_id '{site_id}'")
     
+    # RESET opening hour detection state for this run
+    page.run_js('window.__detected_opening_hour = null')
+    
     url = f"https://antrean.logammulia.com/antrean?site={site_id}"
     
     # --- SMART STATE DETECTION & STATUS REPORTING ---
@@ -315,45 +318,53 @@ def solve_math_question(question_text: str) -> str:
     return ""
 
 def solve_generic_math_captcha(page: ChromiumPage, logger_obj=logger, sync_broadcast=None, node_id=None):
-    """Answers the math captcha and injects the result into empty fields, returning True if found."""
+    """Answers the math captcha by looking at the label connected to the answer input."""
     try:
-        time.sleep(2)
-        page_html = page.html.lower()
+        time.sleep(1.5)
+        # 1. Direct approach: Find the input and its parent label/text
+        math_input = page.ele('css:input[placeholder*="Jawaban"]') or page.ele('css:input[name*="captcha"]')
+        if not math_input:
+            # Fallback to whole page search
+            html = safe_get(page, "html").lower()
+            math_match = re.search(r'(\d+\s+(ditambah|dikurangi|dikali|dibagi)\s+\d+)', html)
+            if not math_match: return False
+            question = math_match.group(1)
+        else:
+            # Get text from the parent or preceding element (usually "Hitunglah X + Y ?")
+            question_context = math_input.parent().text if math_input.parent() else ""
+            math_match = re.search(r'(\d+\s+(ditambah|dikurangi|dikali|dibagi)\s+\d+)', question_context)
+            if not math_match:
+                # Try siblings
+                question_context = page.html # Last resort
+                math_match = re.search(r'(\d+\s+(ditambah|dikurangi|dikali|dibagi)\s+\d+)', question_context)
+            
+            if not math_match: return False
+            question = math_match.group(1)
+
+        answer = solve_math_question(question)
+        if not answer: return False
         
-        if "ditambah" in page_html or "dikurangi" in page_html or "dikali" in page_html:
-            msg = "🧮 Math Verification Detected! Deploying Solver..."
-            if sync_broadcast and node_id:
-                sync_broadcast(f"[Node {node_id}] {msg}")
-            logger_obj.info(msg)
-            
-            math_match = re.search(r'(\d+\s+(ditambah|dikurangi|dikali|dibagi)\s+\d+)', page_html)
-            
-            if math_match:
-                question = math_match.group(1)
-                answer = solve_math_question(question)
-                logger_obj.info(f"Solved Math: {question} = {answer}")
-                if sync_broadcast and node_id:
-                    sync_broadcast(f"[Node {node_id}] 🧠 Solved Math: {question} = {answer}")
-                
-                # Natively input if possible
-                try:
-                    for inp in page.eles('css:input[type="text"]'):
-                        if not inp.value and "email" not in str(inp.attr('name')):
-                            inp.input(str(answer))
-                            break
-                except:
-                    pass
-                
-                # Inject answer into empty text/number fields (skipping email) as fallback
-                page.run_js(f'''
-                    let inputs = document.querySelectorAll('input[type="text"], input[type="number"]');
-                    for(let inp of inputs) {{
-                        if(inp.value === "" && (!inp.name || !inp.name.includes("email"))) {{
-                            inp.value = "{answer}";
-                        }}
-                    }}
-                ''')
-                return True
+        logger_obj.info(f"Solved Math: {question} = {answer}")
+        if sync_broadcast and node_id:
+            sync_broadcast(f"[Node {node_id}] 🧠 Solved Math: {question} = {answer}")
+        
+        # Input answer
+        if math_input:
+            math_input.clear()
+            math_input.input(str(answer))
+        
+        # JS Injection for fast coverage
+        page.run_js(f'''
+            let inputs = document.querySelectorAll('input[type="text"], input[type="number"]');
+            for(let inp of inputs) {{
+                let p = (inp.placeholder || "").toLowerCase();
+                let n = (inp.name || "").toLowerCase();
+                if((p.includes("jawaban") || n.includes("captcha")) && inp.value === "") {{
+                    inp.value = "{answer}";
+                }}
+            }}
+        ''')
+        return True
     except Exception as ex:
         logger_obj.warning(f"Math Captcha Error: {ex}")
     return False
@@ -462,7 +473,7 @@ def solve_cloudflare_cdp(page: ChromiumPage, logger_obj=logger, sync_broadcast=N
             time.sleep(5)
 
             # Check if Cloudflare passed
-            html = page.html.lower() if page.html else ''
+            html = safe_get(page, "html").lower()
             if 'just a moment' not in html and 'challenges.cloudflare.com' not in html:
                 msg = f"🎉 Cloudflare BERHASIL dilewati via CDP! (ratio {x_r},{y_r})"
                 logger_obj.info(msg)
@@ -511,8 +522,8 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
             
             # Proactive Cloudflare detection during the wait
             # STRICTOR DETECTION: Use Title + visible indicator
-            title = page.title.lower() if page.title else ""
-            html = page.html.lower() if page.html else ""
+            title = safe_get(page, "title").lower()
+            html = safe_get(page, "html").lower()
             is_active_cf = "just a moment" in title or "verifying your connection" in title or \
                            (page.ele('css:iframe[src*="challenges.cloudflare.com"]', timeout=0.5) and "challenges.cloudflare.com" in html)
 
@@ -537,7 +548,8 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
             sync_broadcast(f"[Node {node_id}] [{nama}] ❌ Timeout! Cloudflare took too long or form not found. Restarting loop...")
             try:
                 found_inputs = [f"{e.attr('name')} ({e.attr('type')})" for e in page.eles('tag:input')]
-                sync_broadcast(f"[Node {node_id}] [{nama}] 🔍 DIAGNOSTIC Inputs: {', '.join(found_inputs)} | URL: {page.url}")
+                page_url = safe_get(page, "url")
+                sync_broadcast(f"[Node {node_id}] [{nama}] 🔍 DIAGNOSTIC Inputs: {', '.join(found_inputs)} | URL: {page_url}")
             except:
                 pass
             return False
@@ -792,15 +804,15 @@ def run_drission_bot_loop(node_id: int, config: Dict[str, Any], sync_broadcast, 
             elif quota == -1:
                 # Trigger Auto-Login flow
                 auto_login(page, config['email'], config['password'], sync_broadcast, node_id, nama_lengkap)
+                continue # CRITICAL: Bypass Night Mode check after login attempt
             elif quota == -2:
                 # Cloudflare Turnstile challenge page
                 msg = "🛡️ Cloudflare terdeteksi!"
                 sync_broadcast(f"[Node {node_id}] {msg}")
                 logger.info(msg)
                 
-                # Strategy 1: CDP Input.dispatchMouseEvent (FREE, no API, multi-bot capable!)
-                cdp_success = solve_cloudflare_cdp(page, logger, sync_broadcast, node_id)
-                # No fallback to 2Captcha as requested
+                solve_cloudflare_cdp(page, logger, sync_broadcast, node_id)
+                continue # CRITICAL: Bypass Night Mode check after challenge attempt
             elif quota == -3:
                 sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] ⛔ PEMBLOKIRAN IP TERDETEKSI! Server Antam memblokir akses sementara karena terlalu banyak request. Bot akan beristirahat selama 3 menit sebelum mencoba lagi...")
                 time.sleep(180) # 3-minute cooldown
