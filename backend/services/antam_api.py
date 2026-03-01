@@ -480,7 +480,12 @@ def solve_cloudflare_cdp(page: ChromiumPage, logger_obj=logger, sync_broadcast=N
         html = safe_get(page, "html").lower()
             
         is_active_cf = ("just a moment" in title or "verifying your connection" in title) or \
-                       ("challenges.cloudflare.com" in html and not ("email" in html or "password" in html or "wakda" in html))
+                       ("challenges.cloudflare.com" in html and not ("wakda" in html or "/antrean" in safe_get(page, "url")))
+        
+        # Check if already solved (green checkmark)
+        if "success!" in html and not is_active_cf:
+             logger_obj.info("Cloudflare already verified ('Success!' detected).")
+             return True
 
         if not is_active_cf:
             logger_obj.info("Cloudflare challenge not active (Title check passed). Skipping CDP.")
@@ -622,6 +627,18 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
         
         email_inp = safe_ele(page, '@name=email', timeout=0.1) or safe_ele(page, 'css:input[type="email"]', timeout=0.1)
         
+        # --- CLOUDFLARE SYNC GUARD ---
+        # Don't inject if Cloudflare is still visible but NOT yet solved
+        for _ in range(50): # 5s wait max for Turnstile to auto-pass or be clicked
+            html_login = safe_get(page, "html").lower()
+            if "success!" in html_login:
+                break
+            if "challenges.cloudflare.com" in html_login:
+                solve_cloudflare_cdp(page, logger, sync_broadcast, node_id)
+            else:
+                break # No CF found, proceed
+            time.sleep(0.1)
+
         sync_broadcast(f"[Node {node_id}] [{nama}] Injecting credentials instantly...")
         
         # INSTANT JS INJECTION for Login (Fastest method)
