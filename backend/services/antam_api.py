@@ -918,6 +918,16 @@ def run_drission_bot_loop(node_id: int, config: Dict[str, Any], sync_broadcast, 
                 
             else:
                 # quota == 0 (Quota full or unknown)
+                # LAST RESORT: Check for Cloudflare one more time before logging "Quota Full"
+                # to be 1000% sure we are not stuck on a verification screen.
+                title_final = safe_get(page, "title").lower()
+                if "just a moment" in title_final or "verifying your connection" in title_final or \
+                   page.ele('css:iframe[src*="challenges.cloudflare.com"]', timeout=0.1):
+                    sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🛡️ Cloudflare detected (Last-Resort). Attempting CDP bypass...")
+                    solve_cloudflare_cdp(page, logger, sync_broadcast, node_id)
+                    time.sleep(2)
+                    continue
+
                 sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🔴 Quota full. Retrying in 10s...")
                 time.sleep(10)
                 continue
