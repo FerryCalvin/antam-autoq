@@ -188,11 +188,14 @@ def check_quota(page: ChromiumPage, location_id: str, sync_broadcast=None, node_
         # ACTIVE PAGE GUARD: If we are on login or boutique selection, we are NOT in night mode.
         is_active_page = is_login or is_boutique or is_quota_page
         
-        # --- DYNAMIC STATUS REPORTING (ADAPTIVE LOGS) ---
+        # --- DYNAMIC STATUS REPORTING & EARLY CF EXIT ---
+        if is_cf:
+            if sync_broadcast and node_id:
+                sync_broadcast(f"[Node {node_id}] [{nama or 'Bot'}] 🛡️ Cloudflare active. Waiting for bypass...")
+            return -2
+
         if sync_broadcast and node_id:
-            if is_cf:
-                sync_broadcast(f"[Node {node_id}] [{nama or 'Bot'}] 🛡️ Cloudflare challenge active (Title: {page.title}).")
-            elif is_announcement:
+            if is_announcement:
                 sync_broadcast(f"[Node {node_id}] [{nama or 'Bot'}] 📢 Announcement Pop-up detected.")
             elif is_login:
                 sync_broadcast(f"[Node {node_id}] [{nama or 'Bot'}] 🔑 On Login/Home page.")
@@ -291,6 +294,11 @@ def check_quota(page: ChromiumPage, location_id: str, sync_broadcast=None, node_
                 logger.info(f"Jam operasional terdeteksi secara otomatis: Jam {detected_hour}")
                 page.run_js(f'window.__detected_opening_hour = {detected_hour}')
                 return -5 # CODE -5: Standby Mode (Night Mode)
+
+            # 2. Strict CF verification
+            if "just a moment" in title or "verifying your connection" in title or \
+               (page.ele('css:iframe[src*="challenges.cloudflare.com"]', timeout=0.5) and "challenges.cloudflare.com" in h):
+                return -2
 
             # 3. Detection for "Schedule Not Available" (New Requirement)
             if "kuota antrean tidak tersedia" in h:
