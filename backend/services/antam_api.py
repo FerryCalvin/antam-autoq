@@ -682,7 +682,8 @@ def submit_booking(page: ChromiumPage, profile_data: Dict[str, str], location_id
             try:
                 if not page.ele('select#wakda', timeout=2):
                     logger.info("[SNIPER] Attempting Boutique selection bypass...")
-                    select_belm = page.ele('tag:select', timeout=1)
+                    # Use specific ID 'select#site' as confirmed by user's HTML
+                    select_belm = page.ele('select#site', timeout=1) or page.ele('tag:select', timeout=1)
                     if select_belm:
                         try:
                             select_belm.select(location_id)

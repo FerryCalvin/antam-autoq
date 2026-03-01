@@ -64,7 +64,14 @@ async def run_simulation():
                 menu_btn.click()
                 page.wait.load_start(timeout=5)
 
-        # Use the numeric site_id from LOCATION_CODE_TO_SITE_ID mapping for SUB-01
+        # PRO-TIP: Here is the official numerical mapping for Antam Boutiques from your HTML:
+        # ATGM-Gedung Antam: 31, ATGM-Graha Dipta: 30
+        # Balikpapan: 4, Bandung: 1, Bekasi: 19, Bintaro: 16, Bogor: 17, Denpasar: 5
+        # Djuanda: 20, Gedung Antam: 6, Graha Dipta: 3, Makassar: 11, Medan: 10
+        # Palembang: 12, Pekanbaru: 24, Puri Indah: 21, Semarang: 15, Serpong: 23
+        # Setiabudi One: 8, Surabaya 1 Darmo: 13, Surabaya 2 Pakuwon: 14, Yogyakarta: 9
+        
+        # Current Target: Surabaya 1 Darmo
         site_id = "13" 
         target_url = f"https://antrean.logammulia.com/antrean?site={site_id}"
         page.get(target_url)
