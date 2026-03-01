@@ -112,7 +112,8 @@ def safe_get(page, attr="url", retries=5):
             if attr == "title": return page.title
             if attr == "html": return page.html
         except Exception as e:
-            if "refreshed" in str(e).lower() or "loading" in str(e).lower():
+            msg = str(e).lower()
+            if "refreshed" in msg or "loading" in msg or "disconnected" in msg or "targetclosed" in msg:
                 time.sleep(1)
                 continue
             raise e
@@ -133,19 +134,18 @@ def safe_run_js(page, script, retries=5):
 def handle_oops_modal(page, logger_obj=logger, sync_broadcast=None, node_id=None):
     """Detects and closes the 'Oops' error modal if reCAPTCHA or other errors occur."""
     try:
-        # Looking for the "Oops" modal seen in screenshot
-        oops_modal = page.ele('text:Oops', timeout=1)
-        if oops_modal and oops_modal.is_displayed():
-            msg_text = safe_get(page, "html").lower()
-            if "recaptcha" in msg_text or "captcha" in msg_text:
+        # Looking for the "Oops" modal seen in screenshot (VERY FAST CHECK)
+        oops_modal = page.ele('text:Oops', timeout=0.1)
+        if oops_modal and oops_modal.states.is_displayed:
+            # Fast check if it's captcha related
+            if page.ele('text:reCAPTCHA', timeout=0.1) or page.ele('text:captcha', timeout=0.1):
                 msg = "⚠️ Modal 'Oops' terdeteksi (Masalah CAPTCHA). Menutup dan mencoba ulang..."
                 logger_obj.warning(msg)
                 if sync_broadcast and node_id: sync_broadcast(f"[Node {node_id}] {msg}")
                 
-                ok_btn = page.ele('text:OK', timeout=1) or page.ele('css:button.swal2-confirm')
+                ok_btn = page.ele('text:OK', timeout=0.5) or page.ele('css:button.swal2-confirm', timeout=0.5)
                 if ok_btn: 
                     ok_btn.click()
-                    time.sleep(1)
                 
                 # Refresh to start clean
                 page.refresh()
@@ -344,7 +344,8 @@ def solve_math_question(question_text: str) -> str:
 def solve_generic_math_captcha(page: ChromiumPage, logger_obj=logger, sync_broadcast=None, node_id=None):
     """Answers the math captcha by looking at the label connected to the answer input."""
     try:
-        time.sleep(1.5)
+        # Reduced sleep
+        time.sleep(0.5)
         # 1. Direct approach: Find the input and its parent label/text
         math_input = page.ele('css:input[placeholder*="Jawaban"]') or page.ele('css:input[name*="captcha"]')
         if not math_input:
@@ -487,10 +488,10 @@ def solve_cloudflare_cdp(page: ChromiumPage, logger_obj=logger, sync_broadcast=N
             # Fire CDP mouse events (generates isTrusted:true!)
             page.run_cdp('Input.dispatchMouseEvent',
                 type='mouseMoved', x=cx, y=cy, button='none')
-            time.sleep(0.15)
+            time.sleep(0.1)
             page.run_cdp('Input.dispatchMouseEvent',
                 type='mousePressed', x=cx, y=cy, button='left', buttons=1, clickCount=1)
-            time.sleep(0.05)
+            time.sleep(0.02)
             page.run_cdp('Input.dispatchMouseEvent',
                 type='mouseReleased', x=cx, y=cy, button='left', buttons=0, clickCount=1)
 
@@ -542,46 +543,28 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
                 
         
         pass_inp = None
-        for _ in range(30): # 30 iterations of 2s = 60s
-            pass_inp = page.ele('css:input[type="password"]', timeout=2)
+        for _ in range(15): # 15 iterations of 1s = 15s (Faster!)
+            pass_inp = page.ele('css:input[type="password"]', timeout=1)
             if pass_inp:
                 break
             
             # Proactive Cloudflare detection during the wait
-            # STRICTOR DETECTION: Use Title + visible indicator
             title = safe_get(page, "title").lower()
-            html = safe_get(page, "html").lower()
-            is_active_cf = "just a moment" in title or "verifying your connection" in title or \
-                           (page.ele('css:iframe[src*="challenges.cloudflare.com"]', timeout=0.5) and "challenges.cloudflare.com" in html)
-
-            if is_active_cf:
-                sync_broadcast(f"[Node {node_id}] [{nama}] 🛡️ Cloudflare detected during login wait. Attempting CDP bypass...")
+            if "just a moment" in title or "verifying your connection" in title:
+                sync_broadcast(f"[Node {node_id}] [{nama}] 🛡️ Cloudflare detected. Bypassing...")
                 solve_cloudflare_cdp(page, logger, sync_broadcast, node_id)
-                time.sleep(2)
                 continue
             
-            # Try to close any overlaying Splash Screen, "Oops" modals, or Action Not Allowed errors
+            # Fast Modal/Splash cleanup
             try:
                 handle_oops_modal(page, logger, sync_broadcast, node_id)
-                
-                # Check for Action Not Allowed in Login Wait
-                if "the action you have requested is not allowed" in safe_get(page, "html").lower():
-                    kembali_btn = page.ele('text:Kembali', timeout=1)
-                    if kembali_btn: 
-                        kembali_btn.click()
-                        time.sleep(1)
-                    else:
-                        page.get("https://antrean.logammulia.com/login", retry=0, timeout=10)
-                
-                splash_close = page.ele('text:Tutup', timeout=1) or page.ele('css:.close', timeout=1)
-                if splash_close and splash_close.is_displayed():
+                splash_close = page.ele('text:Tutup', timeout=0.1) or page.ele('css:.close', timeout=0.1)
+                if splash_close and splash_close.states.is_displayed:
                     splash_close.click()
-                    time.sleep(1)
-            except:
-                pass
+            except: pass
 
         if not pass_inp:
-            sync_broadcast(f"[Node {node_id}] [{nama}] ❌ Timeout! Cloudflare took too long or form not found. Restarting loop...")
+            sync_broadcast(f"[Node {node_id}] [{nama}] ❌ Login form not found. Restarting...")
             try:
                 found_inputs = [f"{e.attr('name')} ({e.attr('type')})" for e in page.eles('tag:input')]
                 page_url = safe_get(page, "url")
@@ -626,13 +609,14 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
             logger.warning(f"Native trusted form submit failed: {e}")
             pass_inp.input('\n')
         
-        # Wait for redirect to antrean home
+        # Wait for redirect
         page.wait.load_start(timeout=5)
-        time.sleep(4) # Let cookie sink into DrissionPage
+        # Dynamic wait for URL change or absence of password field
+        page.wait.ele_deleted('css:input[type="password"]', timeout=10)
         
         # Only verify success if the password field is no longer on the screen
         page_url = safe_get(page, "url")
-        if not page.ele('css:input[type="password"]', timeout=2):
+        if not page.ele('css:input[type="password"]', timeout=0.5):
             sync_broadcast(f"[Node {node_id}] [{nama}] ✅ Auto-Login Successful! Returning to Quota Target...")
             
             # If immediately dumped to the profile page, proactively redirect to the queue page
