@@ -77,8 +77,44 @@ async def run_simulation():
         page.get(target_url)
         
         print("\n🔥 WE ARE ON THE TARGET PAGE.")
+        # PRE-INJECT elements so Sniper's "Anti-Reload Guard" sees them immediately
+        page.run_js('''
+            // 1. Ensure select#site exists (Official Antam Boutique ID selector)
+            var site_sel = document.querySelector('select#site') || document.querySelector('select[name="site"]');
+            if(!site_sel) {
+                site_sel = document.createElement('select');
+                site_sel.id = 'site';
+                site_sel.name = 'site';
+                site_sel.style.display = 'block';
+                site_sel.innerHTML = '<option value="13">Surabaya 1 Darmo</option>';
+                document.body.appendChild(site_sel);
+            }
+            site_sel.value = "13"; // Pre-select the target
+            
+            // 2. Inject dummy inputs for the sniper to fill
+            ['nama', 'nik', 'phone', 'email'].forEach(name => {
+                if(!document.querySelector('[name="' + name + '"]')) {
+                    let inp = document.createElement('input');
+                    inp.name = name;
+                    inp.type = 'hidden';
+                    document.body.appendChild(inp);
+                }
+            });
+
+            // 3. Inject dummy "Lanjut" button (Purple/Submit)
+            if(!document.getElementById('sim-submit')) {
+                let btn = document.createElement('button');
+                btn.id = 'sim-submit';
+                btn.type = 'submit';
+                btn.textContent = 'Lanjut';
+                btn.style = "position:fixed; bottom:5%; right:5%; padding:15px; background:purple; color:white; font-weight:bold; z-index:10000; border-radius:8px;";
+                btn.onclick = (e) => { e.preventDefault(); console.log('Simulated Submit Clicked'); };
+                document.body.appendChild(btn);
+            }
+        ''')
+        
         print("I will now SIMULATE quota discovery and trigger high-speed JS submission.")
-        input("\nPress ENTER to trigger the Sniper Simulation...")
+        input("\nPress ENTER to trigger the Sniper Simulation (Inject #wakda)...")
         
         # 3. Force Sniper Execution
         config_payload = {
@@ -90,77 +126,32 @@ async def run_simulation():
         
         print("🚀 EXECUTING SNIPER NOW!")
         
-        # We MUST inject the dummy option BEFORE calling submit_booking
+        # Now inject the CRITICAL Quota Dropdown (#wakda)
         page.run_js('''
             var sel = document.querySelector('select#wakda');
             if(!sel) {
                 sel = document.createElement('select');
                 sel.id = 'wakda';
                 sel.name = 'wakda';
-                sel.style.position = 'fixed';
-                sel.style.top = '10%';
-                sel.style.left = '10%';
-                sel.style.width = '300px';
-                sel.style.height = '50px';
-                sel.style.zIndex = '10000';
-                sel.style.border = '5px solid red';
-                sel.style.fontSize = '20px';
-                sel.style.display = 'block';
-                sel.style.visibility = 'visible';
+                sel.style = "position:fixed; top:40%; left:50%; transform:translate(-50%, -50%); width:400px; height:60px; z-index:20000; border:10px solid lime; background:white; font-size:24px; text-align:center; display:block; visibility:visible;";
                 document.body.appendChild(sel);
             }
-            // Clear and add realistic simulation options
-            sel.innerHTML = ''; 
+            // Add realistic options
+            sel.innerHTML = '<option value="">-- Pilih Jadwal --</option>' + 
+                            '<option value="SIMULASI_123">08:00 - 09:00 (Tersedia 5/50)</option>';
+            sel.value = ""; 
             
-            // Opsi 1: Placeholder (akan dilewati oleh sniper karena index == 0)
-            var opt0 = document.createElement('option');
-            opt0.value = "";
-            opt0.text = "-- Pilih Jadwal --";
-            sel.add(opt0);
-            
-            // Opsi 2: Data Simulasi (akan dipilih oleh sniper karena index > 0)
-            var opt1 = document.createElement('option');
-            opt1.value = "SIMULASI_VAL_123";
-            opt1.text = "08:00 - 09:00 (Tersedia 5/50)";
-            sel.add(opt1);
-            
-            sel.value = ""; // Start with placeholder
-            
-            // Inject dummy inputs if they don't exist
-            ['nama', 'nik', 'phone', 'email'].forEach(name => {
-                if(!document.querySelector('[name="' + name + '"]')) {
-                    let inp = document.createElement('input');
-                    inp.name = name;
-                    inp.type = 'hidden';
-                    document.body.appendChild(inp);
-                }
-            });
-
-            // Inject dummy "Lanjut" button (Sniper searches for 'Lanjut' or 'Submit')
-            if(!document.getElementById('sim-submit')) {
-                let btn = document.createElement('button');
-                btn.id = 'sim-submit';
-                btn.type = 'submit';
-                btn.textContent = 'Lanjut';
-                btn.style = "position:fixed; bottom:10%; right:10%; padding:20px; font-size:24px; z-index:10000; background:green; color:white; border-radius:10px; cursor:pointer;";
-                btn.onclick = function(e) { 
-                    console.log('Simulated Submit Clicked'); 
-                    alert('Simulasi: Pendaftaran Berhasil Dikirim!');
-                    e.preventDefault(); 
-                };
-                document.body.appendChild(btn);
-            }
-
-            // Highlight for visibility
+            // Show alert message
             var msg = document.getElementById('simulation-msg');
             if(!msg) {
                 msg = document.createElement('div');
                 msg.id = 'simulation-msg';
-                msg.style = "color:red; background:white; position:fixed; top:30%; left:50%; transform:translateX(-50%); z-index:10001; padding:20px; border:3px solid red; font-size:24px; font-weight:bold; box-shadow: 0 0 20px rgba(0,0,0,0.5);";
+                msg.style = "position:fixed; top:20%; left:50%; transform:translateX(-50%); z-index:10001; padding:20px; background:red; color:white; font-size:22px; font-weight:bold; border:4px solid white; box-shadow:0 0 30px rgba(255,0,0,0.8);";
                 document.body.appendChild(msg);
             }
-            msg.innerHTML = '🔥 SIMULASI KUOTA AKTIF! 🔥<br><small>Menjalankan Sniper dalam 2 detik...</small>';
+            msg.innerHTML = '⚡ MOCK QUOTA DETECTED! ⚡<br><small>Sniper is engaging...</small>';
             
+            // Trigger change event to alert the bot if it was polling
             sel.dispatchEvent(new Event('change', { bubbles: true }));
         ''')
         

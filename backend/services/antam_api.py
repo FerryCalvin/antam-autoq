@@ -665,66 +665,66 @@ def submit_booking(page: ChromiumPage, profile_data: Dict[str, str], location_id
     logger.info(f"[SNIPER] Starting sequence for {profile_data.get('nama_lengkap', 'Unknown')} at {location_id}")
     
     try:
-        # 1. Fast Sniper: Skip reload if we are already sitting on the quota page (from check_quota or simulation)
-        # Check carefully if the select element is already present and displayed
-        existing_select = page.ele('select#wakda', timeout=0.5)
+        # 1. State Recognition (Anti-Reload Guard)
+        # Check if we already have the quota dropdown (Success state) OR the boutique dropdown (Ready state)
+        has_wakda = page.ele('select#wakda', timeout=0.5)
+        has_site = page.ele('select#site', timeout=0.3) or page.ele('@@name=site', timeout=0.1)
         
-        if existing_select and existing_select.is_displayed():
-            logger.info("[SNIPER] Quota dropdown already visible. Skipping navigation/selection.")
+        # If we see any of these, TRUST the page and skip navigation (Crucial for Simulation)
+        if (has_wakda and has_wakda.is_displayed()) or (has_site and has_site.is_displayed()):
+             logger.info(f"[SNIPER] State recognized (wakda={bool(has_wakda)}, site={bool(has_site)}). Skipping initial navigation.")
         else:
-            logger.info(f"[SNIPER] Dropdown not found. Navigating to {url}...")
-            try:
-                page.get(url, retry=0, timeout=15)
-            except Exception as e:
-                logger.warning(f"[SNIPER] Initial navigation warning: {e}")
-                
-            # Boutique selection auto-bypass for Sniper (in case we did reload)
-            try:
-                if not page.ele('select#wakda', timeout=2):
-                    logger.info("[SNIPER] Attempting Boutique selection bypass...")
-                    # Use specific ID 'select#site' as confirmed by user's HTML
-                    select_belm = page.ele('select#site', timeout=1) or page.ele('tag:select', timeout=1)
-                    if select_belm:
-                        try:
-                            select_belm.select(location_id)
-                        except:
-                            # Fallback selection by iteration
-                            for opt in select_belm.eles('tag:option'):
-                                if location_id.lower() in opt.text.lower() or location_id.lower() in str(opt.attr('value')).lower():
-                                    select_belm.select(opt.attr('value'))
-                                    break
-                                    
-                        time.sleep(1)
-                        submit_btn = page.ele('text:Tampilkan Butik', timeout=1) or page.ele('css:button[type="submit"]')
-                        if submit_btn:
-                            submit_btn.click() # Native trusted click
-                        page.wait.load_start(timeout=5)
-            except Exception as e:
-                logger.warning(f"[SNIPER] Boutique bypass error: {e}")
-            
-        if not page.wait.ele_displayed('select#wakda', timeout=20):
-             # Check if we are still on /users and try to rescue
-             page_url = safe_get(page, "url")
-             if "/users" in page_url:
-                 logger.info("[SNIPER] Currently on Profile page. Retrying Boutique selection via Menu button...")
-                 menu_btn = page.ele('text:Menu Antrean', timeout=2) or \
-                            page.ele('@@class*=btn@@text():Menu Antrean', timeout=1) or \
-                            page.ele('@@style*background-color: rgb(86, 44, 255)', timeout=0.5)
+            page_url = safe_get(page, "url")
+            if "/users" in page_url:
+                 logger.info("[SNIPER] Currently on Profile page. Navigating to Menu Antrean...")
+                 menu_btn = page.ele('text:Menu Antrean', timeout=2) or page.ele('@@style*background-color: rgb(86, 44, 255)', timeout=0.5)
                  if menu_btn:
                      menu_btn.click()
                      page.wait.load_start(timeout=5)
-                     # Final try to find Wakda
-                     if page.wait.ele_displayed('select#wakda', timeout=10):
-                         pass # Continued below
-                     else:
-                        logger.error("[SNIPER] Failed: Still cannot find select#wakda after Menu redirect.")
-                        return {"success": False, "error": "Select dropdown never loaded during sniper execution."}
                  else:
-                    logger.error("[SNIPER] Failed: Select dropdown never loaded.")
-                    return {"success": False, "error": "Select dropdown never loaded during sniper execution."}
-             else:
-                logger.error("[SNIPER] Failed: Select dropdown never loaded.")
-                return {"success": False, "error": "Select dropdown never loaded during sniper execution."}
+                     logger.info(f"[SNIPER] Navigating directly to target URL: {url}")
+                     page.get(url, retry=0, timeout=12)
+            else:
+                logger.info(f"[SNIPER] Dropdown not found. Navigating to {url}...")
+                try:
+                    page.get(url, retry=0, timeout=15)
+                except Exception as e:
+                    logger.warning(f"[SNIPER] Initial navigation warning: {e}")
+                
+        # 2. Boutique selection bypass (if we landed on the selection page)
+        try:
+            # Re-check if wakda is still missing after potential navigation
+            if not page.ele('select#wakda', timeout=1.5):
+                logger.info("[SNIPER] Quota selection (wakda) not visible. Attempting Boutique Selection bypass...")
+                # Use powerful JS selection to ensure events like 'change' are fired correctly
+                page.run_js(f'''
+                    var sel = document.querySelector('select#site') || document.querySelector('select[name="site"]');
+                    if(sel) {{
+                        var nativeSetter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set;
+                        nativeSetter.call(sel, '{location_id}');
+                        sel.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                        sel.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                    }}
+                ''')
+                
+                time.sleep(1)
+                submit_btn = page.ele('text:Tampilkan Butik', timeout=1) or page.ele('css:button[type="submit"]')
+                if submit_btn:
+                    logger.info("[SNIPER] Clicking 'Tampilkan Butik'...")
+                    submit_btn.click() # Native trusted click
+                    page.wait.load_start(timeout=5)
+                else:
+                    # Alternative: submit the form directly if button not found by text
+                    page.run_js('document.querySelector("form").submit();')
+                    page.wait.load_start(timeout=5)
+        except Exception as e:
+            logger.warning(f"[SNIPER] Boutique selection assist warning: {e}")
+            
+        # Final wait for dropdown
+        if not page.wait.ele_displayed('select#wakda', timeout=15):
+             page_url = safe_get(page, "url")
+             logger.error(f"[SNIPER] Failed: select#wakda never loaded at {page_url}")
+             return {"success": False, "error": f"Select dropdown never loaded at {page_url}"}
         
         # 2. Find best available slot
         select_wakda = page.ele('select#wakda')
