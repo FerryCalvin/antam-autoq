@@ -71,9 +71,6 @@ async def run_simulation():
         
         print("🚀 EXECUTING SNIPER NOW!")
         
-        # Anti-Reload Protection: Temporarily override page.get to prevent DOM clearing during simulation
-        page.run_js('window.__original_get = page.get; window.page_get_blocked = true;')
-        
         # We MUST inject the dummy option BEFORE calling submit_booking
         page.run_js('''
             var sel = document.querySelector('select#wakda');
