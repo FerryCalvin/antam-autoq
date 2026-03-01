@@ -119,6 +119,33 @@ def safe_get(page, attr="url", retries=5):
             raise e
     return ""
 
+def wait_for_stable(page, retries=5):
+    """Waits for the page to stop being in a 'refreshed' or 'loading' state."""
+    for i in range(retries):
+        try:
+            _ = page.url
+            return True
+        except Exception as e:
+            msg = str(e).lower()
+            if "refreshed" in msg or "loading" in msg or "disconnected" in msg or "targetclosed" in msg:
+                time.sleep(1)
+                continue
+            raise e
+    return False
+
+def safe_ele(container, selector, timeout=5, retries=3):
+    """Safely finds an element, retrying if the page is refreshed."""
+    for i in range(retries):
+        try:
+            return container.ele(selector, timeout=timeout)
+        except Exception as e:
+            msg = str(e).lower()
+            if "refreshed" in msg or "loading" in msg or "disconnected" in msg or "targetclosed" in msg:
+                time.sleep(1)
+                continue
+            raise e
+    return None
+
 def safe_run_js(page, script, retries=5):
     """Safely run JS on page with retries for 'The page is refreshed' errors."""
     for i in range(retries):
@@ -163,6 +190,9 @@ def check_quota(page: ChromiumPage, location_id: str, sync_broadcast=None, node_
     site_id = LOCATION_CODE_TO_SITE_ID.get(location_id, location_id)
     logger.info(f"Translating location '{location_id}' -> site_id '{site_id}'")
     
+    # Global Stability Guard
+    wait_for_stable(page)
+    
     # RESET opening hour detection state for this run
     page.run_js('window.__detected_opening_hour = null')
     
@@ -177,13 +207,13 @@ def check_quota(page: ChromiumPage, location_id: str, sync_broadcast=None, node_
     try:
     # Stricter CF Detection: Don't just look at HTML (Rocket Loader false positive), look at Title OR visible challenge iframe
         is_cf = ("just a moment" in title_lower or "verifying your connection" in title_lower) or \
-                (page.ele('css:iframe[src*="challenges.cloudflare.com"]', timeout=0.5) and "challenges.cloudflare.com" in html_lower)
+                (safe_ele(page, 'css:iframe[src*="challenges.cloudflare.com"]', timeout=0.5) and "challenges.cloudflare.com" in html_lower)
         
         is_login = "/masuk" in page_url or "/login" in page_url or "/home" in page_url
         is_boutique = ("select" in html_lower and "tampilkan butik" in html_lower) or \
                       ("antrean belm" in html_lower and "pilih belm" in html_lower)
         is_quota_page = "select#wakda" in html_lower
-        is_announcement = page.ele('text:Pengumuman', timeout=0.5) or page.ele('css:.modal-content', timeout=0.5)
+        is_announcement = safe_ele(page, 'text:Pengumuman', timeout=0.5) or safe_ele(page, 'css:.modal-content', timeout=0.5)
         
         # ACTIVE PAGE GUARD: If we are on login or boutique selection, we are NOT in night mode.
         is_active_page = is_login or is_boutique or is_quota_page
@@ -274,10 +304,13 @@ def check_quota(page: ChromiumPage, location_id: str, sync_broadcast=None, node_
         if "/users" in page_url:
             for _ in range(3): # Retry navigation
                 try:
+                    # Global Stability Guard before searching profile elements
+                    wait_for_stable(page)
+                    
                     # Enhanced Menu Antrean detection (Text or CSS color/property)
-                    menu_btn = page.ele('text:Menu Antrean', timeout=2) or \
-                               page.ele('@@class*=btn@@text():Menu Antrean', timeout=1) or \
-                               page.ele('@@style*background-color: rgb(86, 44, 255)', timeout=0.5)
+                    menu_btn = safe_ele(page, 'text:Menu Antrean', timeout=2) or \
+                               safe_ele(page, '@@class*=btn@@text():Menu Antrean', timeout=1) or \
+                               safe_ele(page, '@@style*background-color: rgb(86, 44, 255)', timeout=0.5)
                     
                     if menu_btn and str(menu_btn.tag) != 'NoneElement':
                         sync_broadcast(f"[Node {node_id}] [{nama or 'Bot'}] 🎯 Navigating from Profile to Menu Antrean...")
@@ -359,10 +392,11 @@ def solve_math_question(question_text: str) -> str:
 def solve_generic_math_captcha(page: ChromiumPage, logger_obj=logger, sync_broadcast=None, node_id=None):
     """Answers the math captcha by looking at the label connected to the answer input."""
     try:
-        # Reduced sleep
+        # Global Stability Guard
+        wait_for_stable(page)
         time.sleep(0.5)
         # 1. Direct approach: Find the input and its parent label/text
-        math_input = page.ele('css:input[placeholder*="Jawaban"]') or page.ele('css:input[name*="captcha"]')
+        math_input = safe_ele(page, 'css:input[placeholder*="Jawaban"]', timeout=1) or safe_ele(page, 'css:input[name*="captcha"]', timeout=1)
         if not math_input:
             # Fallback to whole page search
             html = safe_get(page, "html").lower()
@@ -545,11 +579,15 @@ def solve_cloudflare_cdp(page: ChromiumPage, logger_obj=logger, sync_broadcast=N
 def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, node_id: int, nama: str) -> bool:
     """Automates the login sequence if the bot gets redirected to /masuk."""
     sync_broadcast(f"[Node {node_id}] [{nama}] 🤖 Handling Auto-Login sequence...")
+    
+    # Global Stability Guard
+    wait_for_stable(page)
+    
     try:
         # Handle the /home redirect trap
         if "/home" in page.url or page.url.rstrip('/') == "https://antrean.logammulia.com":
             sync_broadcast(f"[Node {node_id}] [{nama}] 🏠 Bypassing Homepage/Announcement...")
-            login_btn = page.ele('text:Log In', timeout=2) or page.ele('text:Login', timeout=2) or page.ele('tag:a@@text():Log In', timeout=1)
+            login_btn = safe_ele(page, 'text:Log In', timeout=2) or safe_ele(page, 'text:Login', timeout=2)
             if login_btn:
                 try: login_btn.click()
                 except: page.get("https://antrean.logammulia.com/login", retry=0, timeout=15)
@@ -559,7 +597,7 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
         
         pass_inp = None
         for _ in range(15): # 15 iterations of 1s = 15s (Faster!)
-            pass_inp = page.ele('css:input[type="password"]', timeout=1)
+            pass_inp = safe_ele(page, 'css:input[type="password"]', timeout=1)
             if pass_inp:
                 break
             
@@ -613,7 +651,7 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
         try:
             login_form = pass_inp.parent('tag:form')
             if login_form:
-                submit_btn = login_form.ele('tag:button', timeout=1) or login_form.ele('css:input[type="submit"]')
+                submit_btn = safe_ele(login_form, 'tag:button', timeout=1) or safe_ele(login_form, 'css:input[type="submit"]')
                 if submit_btn:
                     submit_btn.click() # Real human click!
                 else:
@@ -631,15 +669,16 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
         
         # Only verify success if the password field is no longer on the screen
         page_url = safe_get(page, "url")
-        if not page.ele('css:input[type="password"]', timeout=0.5):
+        if not safe_ele(page, 'css:input[type="password"]', timeout=0.5):
             sync_broadcast(f"[Node {node_id}] [{nama}] ✅ Auto-Login Successful! Returning to Quota Target...")
             
             # If immediately dumped to the profile page, proactively redirect to the queue page
             if "/users" in page_url:
+                wait_for_stable(page)
                 # Proactive navigation for purple button
-                menu_btn = page.ele('text:Menu Antrean', timeout=2) or \
-                           page.ele('@@class*=btn@@text():Menu Antrean', timeout=1) or \
-                           page.ele('@@style*background-color: rgb(86, 44, 255)', timeout=0.5)
+                menu_btn = safe_ele(page, 'text:Menu Antrean', timeout=2) or \
+                           safe_ele(page, '@@class*=btn@@text():Menu Antrean', timeout=1) or \
+                           safe_ele(page, '@@style*background-color: rgb(86, 44, 255)', timeout=0.5)
                 
                 if menu_btn and str(menu_btn.tag) != 'NoneElement':
                     sync_broadcast(f"[Node {node_id}] [{nama}] 🎯 Navigating from Profile to Menu Antrean...")
@@ -663,11 +702,14 @@ def submit_booking(page: ChromiumPage, profile_data: Dict[str, str], location_id
     url = f"https://antrean.logammulia.com/antrean?site={location_id}"
     logger.info(f"[SNIPER] Starting sequence for {profile_data.get('nama_lengkap', 'Unknown')} at {location_id}")
     
+    # Global Stability Guard
+    wait_for_stable(page)
+    
     try:
         # 1. State Recognition (Anti-Reload Guard)
         # Check if we already have the quota dropdown (Success state) OR the boutique dropdown (Ready state)
-        has_wakda = page.ele('select#wakda', timeout=0.5)
-        has_site = page.ele('select#site', timeout=0.3) or page.ele('@@name=site', timeout=0.1)
+        has_wakda = safe_ele(page, 'select#wakda', timeout=0.5)
+        has_site = safe_ele(page, 'select#site', timeout=0.3) or safe_ele(page, '@@name=site', timeout=0.1)
         
         # If we see any of these, TRUST the page and skip navigation (Crucial for Simulation)
         if (has_wakda and has_wakda.states.is_displayed) or (has_site and has_site.states.is_displayed):
@@ -676,7 +718,7 @@ def submit_booking(page: ChromiumPage, profile_data: Dict[str, str], location_id
             page_url = safe_get(page, "url")
             if "/users" in page_url:
                  logger.info("[SNIPER] Currently on Profile page. Navigating to Menu Antrean...")
-                 menu_btn = page.ele('text:Menu Antrean', timeout=2) or page.ele('@@style*background-color: rgb(86, 44, 255)', timeout=0.5)
+                 menu_btn = safe_ele(page, 'text:Menu Antrean', timeout=2) or safe_ele(page, '@@style*background-color: rgb(86, 44, 255)', timeout=0.5)
                  if menu_btn:
                      menu_btn.click()
                      page.wait.load_start(timeout=5)
@@ -693,7 +735,7 @@ def submit_booking(page: ChromiumPage, profile_data: Dict[str, str], location_id
         # 2. Boutique selection bypass (if we landed on the selection page)
         try:
             # Re-check if wakda is still missing after potential navigation
-            if not page.ele('select#wakda', timeout=1.5):
+            if not safe_ele(page, 'select#wakda', timeout=1.5):
                 logger.info("[SNIPER] Quota selection (wakda) not visible. Attempting Boutique Selection bypass...")
                 # Use powerful JS selection to ensure events like 'change' are fired correctly
                 page.run_js(f'''
@@ -707,7 +749,7 @@ def submit_booking(page: ChromiumPage, profile_data: Dict[str, str], location_id
                 ''')
                 
                 time.sleep(1)
-                submit_btn = page.ele('text:Tampilkan Butik', timeout=1) or page.ele('css:button[type="submit"]')
+                submit_btn = safe_ele(page, 'text:Tampilkan Butik', timeout=1) or safe_ele(page, 'css:button[type="submit"]')
                 if submit_btn:
                     logger.info("[SNIPER] Clicking 'Tampilkan Butik'...")
                     submit_btn.click() # Native trusted click
@@ -773,7 +815,7 @@ def submit_booking(page: ChromiumPage, profile_data: Dict[str, str], location_id
         logger.info("[SNIPER] Submitting form ...")
         
         # Click submit natively to trigger JS event listeners (trusted event)
-        final_btn = page.ele('text:Lanjut', timeout=1) or page.ele('text:Submit', timeout=1) or page.ele('css:button[type="submit"]')
+        final_btn = safe_ele(page, 'text:Lanjut', timeout=1) or safe_ele(page, 'text:Submit', timeout=1) or safe_ele(page, 'css:button[type="submit"]')
         if final_btn:
             final_btn.click() # Native trusted
         else:
@@ -834,114 +876,108 @@ def run_drission_bot_loop(node_id: int, config: Dict[str, Any], sync_broadcast, 
         page = _get_stealth_page(proxy, node_id)
         
         while True:
-            # IMPORTANT: Check if we have been cancelled by the kill switch!
-            # Since this is a thread, we can't be easily cancelled by asyncio unless we check a flag.
-            if node_id not in nodes_ref:
-                sync_broadcast(f"[Node {node_id}] Thread gracefully exiting...")
-                break
-                
-            quota = check_quota(page, target_location, sync_broadcast, node_id, nama_lengkap)
-            
-            if quota > 0:
-                sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🟢 SUCCESS: Found {quota} slots! Triggering Sniper...")
-                config_payload = {
-                    "nama_lengkap": config['nama_lengkap'],
-                    "nik": config['nik'],
-                    "no_hp": config['no_hp'],
-                    "email": config['email']
-                }
-                res = submit_booking(page, config_payload, target_location)
-                
-                if res.get("success"):
-                   sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🏆 BOOKING SUCCESSFUL! URL: {res.get('url')}")
-                   
-                   # --- KILL SWITCH (Synchronous thread version) ---
-                   kill_targets = []
-                   for other_id, node_data in nodes_ref.items():
-                       if other_id != node_id and node_data['config'].get('nik') == nik:
-                           kill_targets.append(other_id)
-                           
-                   for t_id in kill_targets:
-                       nodes_ref[t_id]["task"].cancel()
-                       del nodes_ref[t_id]
-                       sync_broadcast(f"[System] 🛑 KILL SWITCH ACTIVATED: Node {t_id} stopped because NIK {nik} already secured a booking.")
-
-                else:
-                   sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🔴 SNIPER FAILED: {res.get('error')}")
-                   
-                break # Stop looping after sniper execution
-
-            elif quota == -1:
-                # Trigger Auto-Login flow
-                auto_login(page, config['email'], config['password'], sync_broadcast, node_id, nama_lengkap)
-                continue 
-                
-            elif quota == -2:
-                # Cloudflare challenge
-                solve_cloudflare_cdp(page, logger, sync_broadcast, node_id)
-                continue 
-                
-            elif quota == -3:
-                # IP Blocked
-                sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] ⛔ PEMBLOKIRAN IP TERDETEKSI! Server Antam memblokir akses sementara. Cooldown 3 menit...")
-                time.sleep(180)
-                continue
-                
-            elif quota == -4:
-                # Crash / Disconnect
-                sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] ⚠️ Browser lost! Requesting fresh instance...")
-                try: page.quit()
-                except: pass
-                time.sleep(2)
-                page = _get_stealth_page(proxy, node_id)
-                continue
-                
-            elif quota == -5:
-                # Night Mode (Wait for opening hour)
-                detected_h = safe_run_js(page, 'return window.__detected_opening_hour')
-                
-                if detected_h is not None:
-                    opening_hour = int(detected_h)
-                    current_hour = datetime.datetime.now().hour
+            try:
+                # IMPORTANT: Check if we have been cancelled by the kill switch!
+                if node_id not in nodes_ref:
+                    sync_broadcast(f"[Node {node_id}] Thread gracefully exiting...")
+                    break
                     
-                    if current_hour < opening_hour:
-                        sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🌙 Standby: Butik buka jam {opening_hour} (Sekarang jam {current_hour}). Tidur 5 menit...")
-                        time.sleep(300)
-                    else:
-                        # Closing in on opening time, faster refresh
-                        sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🕒 Jam buka mendekat ({opening_hour}:00). Standby tiap 10 detik...")
-                        time.sleep(10)
-                else:
-                    # If we got -5 but NO opening hour was captured, something is wrong or ambiguous.
-                    # Do NOT sleep for 5 minutes. Just a moderate refresh.
-                    sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] ⚠️ Standby detected but hour unknown. Refreshing in 30s...")
-                    time.sleep(30)
-                continue
-
-            elif quota == -6:
-                # Schedule NOT YET RELEASED (Admin hasn't set it up)
-                sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🟡 Jadwal belum tersedia (Belum dirilis admin). Cek tiap 20 detik...")
-                time.sleep(20)
-                continue
+                quota = check_quota(page, target_location, sync_broadcast, node_id, nama_lengkap)
                 
-            else:
-                # quota == 0 (Quota full or unknown)
-                # LAST RESORT: Check for Cloudflare one more time before logging "Quota Full"
-                # to be 1000% sure we are not stuck on a verification screen.
-                title_final = safe_get(page, "title").lower()
-                if "just a moment" in title_final or "verifying your connection" in title_final or \
-                   page.ele('css:iframe[src*="challenges.cloudflare.com"]', timeout=0.1):
-                    sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🛡️ Cloudflare detected (Last-Resort). Attempting CDP bypass...")
+                if quota > 0:
+                    sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🟢 SUCCESS: Found {quota} slots! Triggering Sniper...")
+                    config_payload = {
+                        "nama_lengkap": config['nama_lengkap'],
+                        "nik": config['nik'],
+                        "no_hp": config['no_hp'],
+                        "email": config['email']
+                    }
+                    res = submit_booking(page, config_payload, target_location)
+                    
+                    if res.get("success"):
+                       sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🏆 BOOKING SUCCESSFUL! URL: {res.get('url')}")
+                       
+                       # --- KILL SWITCH (Synchronous thread version) ---
+                       kill_targets = []
+                       for other_id, node_data in nodes_ref.items():
+                           if other_id != node_id and node_data['config'].get('nik') == nik:
+                               kill_targets.append(other_id)
+                               
+                       for t_id in kill_targets:
+                           nodes_ref[t_id]["task"].cancel()
+                           del nodes_ref[t_id]
+                           sync_broadcast(f"[System] 🛑 KILL SWITCH ACTIVATED: Node {t_id} stopped because NIK {nik} already secured a booking.")
+
+                    else:
+                       sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🔴 SNIPER FAILED: {res.get('error')}")
+                       
+                    break # Stop looping after sniper execution
+
+                elif quota == -1:
+                    auto_login(page, config['email'], config['password'], sync_broadcast, node_id, nama_lengkap)
+                    continue 
+                    
+                elif quota == -2:
                     solve_cloudflare_cdp(page, logger, sync_broadcast, node_id)
+                    continue 
+                    
+                elif quota == -3:
+                    sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] ⛔ PEMBLOKIRAN IP TERDETEKSI! Cooldown 3 menit...")
+                    time.sleep(180)
+                    continue
+                    
+                elif quota == -4:
+                    sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] ⚠️ Browser lost! Requesting fresh instance...")
+                    try: page.quit()
+                    except: pass
                     time.sleep(2)
+                    page = _get_stealth_page(proxy, node_id)
+                    continue
+                    
+                elif quota == -5:
+                    detected_h = safe_run_js(page, 'return window.__detected_opening_hour')
+                    if detected_h is not None:
+                        opening_hour = int(detected_h)
+                        current_hour = datetime.datetime.today().hour
+                        if current_hour < opening_hour:
+                            sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🌙 Standby: Jam {opening_hour} (Sekarang jam {current_hour}). Tidur 5 menit...")
+                            time.sleep(300)
+                        else:
+                            sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🕒 Jam buka mendekat. Standby tiap 10 detik...")
+                            time.sleep(10)
+                    else:
+                        sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] ⚠️ Standby unknown. Refreshing in 30s...")
+                        time.sleep(30)
                     continue
 
-                sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🔴 Quota full. Retrying in 10s...")
-                time.sleep(10)
+                elif quota == -6:
+                    sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🟡 Jadwal belum tersedia. Cek tiap 20 detik...")
+                    time.sleep(20)
+                    continue
+                    
+                else:
+                    # quota == 0 (Quota full or unknown)
+                    title_final = safe_get(page, "title").lower()
+                    if "just a moment" in title_final or "verifying your connection" in title_final or \
+                       safe_ele(page, 'css:iframe[src*="challenges.cloudflare.com"]', timeout=0.1):
+                        sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🛡️ Cloudflare detected (Last-Resort). Bypassing...")
+                        solve_cloudflare_cdp(page, logger, sync_broadcast, node_id)
+                        time.sleep(2)
+                        continue
+
+                    sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🔴 Quota full. Retrying in 10s...")
+                    time.sleep(10)
+                    continue
+
+            except Exception as e:
+                msg = str(e).lower()
+                if "refreshed" in msg or "loading" in msg or "disconnected" in msg or "targetclosed" in msg:
+                    sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🔄 Page refreshed/refreshed state detected. Standing by...")
+                    time.sleep(2)
+                    continue
+                sync_broadcast(f"[Node {node_id}] 🔴 Critical Loop Error: {str(e)}")
+                time.sleep(5)
                 continue
-                
-    except Exception as e:
-        sync_broadcast(f"[Node {node_id}] 🔴 Critical Thread Error: {str(e)}")
     finally:
         if page:
             try:
