@@ -410,8 +410,8 @@ def solve_cloudflare_cdp(page: ChromiumPage, logger_obj=logger, sync_broadcast=N
         title = safe_get(page, "title").lower()
         html = safe_get(page, "html").lower()
             
-        is_active_cf = "just a moment" in title or "verifying your connection" in title or \
-                       (page.ele('css:iframe[src*="challenges.cloudflare.com"]', timeout=0.5) and "challenges.cloudflare.com" in html)
+        is_active_cf = ("just a moment" in title or "verifying your connection" in title) or \
+                       ("challenges.cloudflare.com" in html and not ("email" in html or "password" in html or "wakda" in html))
 
         if not is_active_cf:
             logger_obj.info("✅ Cloudflare challenge not active (Title check passed). Skipping CDP.")
@@ -489,18 +489,21 @@ def solve_cloudflare_cdp(page: ChromiumPage, logger_obj=logger, sync_broadcast=N
             page.run_cdp('Input.dispatchMouseEvent',
                 type='mouseReleased', x=cx, y=cy, button='left', buttons=0, clickCount=1)
 
-            time.sleep(5)
+            time.sleep(2)
 
             # Check if Cloudflare passed
-            html = safe_get(page, "html").lower()
-            if 'just a moment' not in html and 'challenges.cloudflare.com' not in html:
+            # Success means "Just a moment" is gone AND we see login fields or quota page/url
+            html_now = safe_get(page, "html").lower()
+            url_now = safe_get(page, "url").lower()
+            
+            is_passed = 'just a moment' not in html_now and \
+                        ('email' in html_now or 'password' in html_now or 'wakda' in html_now or '/antrean' in url_now or '/users' in url_now)
+            
+            if is_passed:
                 msg = f"🎉 Cloudflare BERHASIL dilewati via CDP! (ratio {x_r},{y_r})"
                 logger_obj.info(msg)
                 if sync_broadcast and node_id:
                     sync_broadcast(f"[Node {node_id}] {msg}")
-                
-                # Settle down for 5 seconds to let redirects or page state update
-                time.sleep(5)
                 return True
 
         msg = "❌ Semua CDP click ratios gagal melewati Cloudflare."
@@ -652,21 +655,29 @@ def submit_booking(page: ChromiumPage, profile_data: Dict[str, str], location_id
     logger.info(f"[SNIPER] Starting sequence for {profile_data.get('nama_lengkap', 'Unknown')} at {location_id}")
     
     try:
-        # 1. Fast Sniper: Skip reload if we are already sitting on the quota page from check_quota!
-        if not page.ele('select#wakda', timeout=1):
+        # 1. Fast Sniper: Skip reload if we are already sitting on the quota page (from check_quota or simulation)
+        # Check carefully if the select element is already present and displayed
+        existing_select = page.ele('select#wakda', timeout=0.5)
+        
+        if existing_select and existing_select.is_displayed():
+            logger.info("[SNIPER] Quota dropdown already visible. Skipping navigation/selection.")
+        else:
+            logger.info(f"[SNIPER] Dropdown not found. Navigating to {url}...")
             try:
                 page.get(url, retry=0, timeout=15)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"[SNIPER] Initial navigation warning: {e}")
                 
             # Boutique selection auto-bypass for Sniper (in case we did reload)
             try:
                 if not page.ele('select#wakda', timeout=2):
+                    logger.info("[SNIPER] Attempting Boutique selection bypass...")
                     select_belm = page.ele('tag:select', timeout=1)
                     if select_belm:
                         try:
                             select_belm.select(location_id)
                         except:
+                            # Fallback selection by iteration
                             for opt in select_belm.eles('tag:option'):
                                 if location_id.lower() in opt.text.lower() or location_id.lower() in str(opt.attr('value')).lower():
                                     select_belm.select(opt.attr('value'))
@@ -677,10 +688,12 @@ def submit_booking(page: ChromiumPage, profile_data: Dict[str, str], location_id
                         if submit_btn:
                             submit_btn.click() # Native trusted click
                         page.wait.load_start(timeout=5)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"[SNIPER] Boutique bypass error: {e}")
             
+        # Final wait for dropdown
         if not page.wait.ele_displayed('select#wakda', timeout=20):
+             logger.error("[SNIPER] Failed: Select dropdown never loaded.")
              return {"success": False, "error": "Select dropdown never loaded during sniper execution."}
         
         # 2. Find best available slot
