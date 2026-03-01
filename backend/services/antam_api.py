@@ -394,7 +394,7 @@ def solve_generic_math_captcha(page: ChromiumPage, logger_obj=logger, sync_broad
     try:
         # Global Stability Guard
         wait_for_stable(page)
-        time.sleep(0.5)
+        time.sleep(0.1)
         # 1. Direct approach: Find the input and its parent label/text
         math_input = safe_ele(page, 'css:input[placeholder*="Jawaban"]', timeout=1) or safe_ele(page, 'css:input[name*="captcha"]', timeout=1)
         if not math_input:
@@ -478,7 +478,7 @@ def solve_cloudflare_cdp(page: ChromiumPage, logger_obj=logger, sync_broadcast=N
         page.run_cdp('DOM.enable')
         
         iframe_node = None
-        for attempt in range(15): # Retry for up to 15 seconds
+        for attempt in range(50): # 50 * 0.2s = 10s (Faster polling!)
             result = page.run_cdp('DOM.getFlattenedDocument', depth=-1, pierce=True)
             nodes = result.get('nodes', [])
 
@@ -494,10 +494,10 @@ def solve_cloudflare_cdp(page: ChromiumPage, logger_obj=logger, sync_broadcast=N
             
             if iframe_node:
                 break
-            time.sleep(1)
+            time.sleep(0.2)
 
         if not iframe_node:
-            msg = "❌ Iframe Cloudflare Turnstile tidak ditemukan di DOM setelah 15 detik."
+            msg = "❌ Iframe Cloudflare Turnstile tidak ditemukan di DOM."
             logger_obj.warning(msg)
             if sync_broadcast and node_id:
                 sync_broadcast(f"[Node {node_id}] {msg}")
@@ -516,50 +516,42 @@ def solve_cloudflare_cdp(page: ChromiumPage, logger_obj=logger, sync_broadcast=N
         logger_obj.info(f"Iframe at ({x_start},{y_start}) size {iframe_w}x{iframe_h}")
 
         # Step 3: Try multiple checkbox position ratios
-        # The checkbox is inside a Shadow DOM within the Turnstile iframe
         ratios = [
-            (0.12, 0.52),  # Primary: center of checkbox square
+            (0.12, 0.52),  # Primary
             (0.15, 0.50),  # Slightly right
             (0.10, 0.50),  # Slightly left
-            (0.20, 0.50),  # Further right
-            (0.08, 0.50),  # Further left
         ]
 
         for idx, (x_r, y_r) in enumerate(ratios):
             cx = x_start + (iframe_w * x_r)
             cy = y_start + (iframe_h * y_r)
 
-            msg = f"🎯 CDP Click #{idx+1}: ({cx:.0f},{cy:.0f}) ratio=({x_r},{y_r})"
+            msg = f"🎯 CDP Click #{idx+1}: ({cx:.0f},{cy:.0f})"
             logger_obj.info(msg)
             if sync_broadcast and node_id:
                 sync_broadcast(f"[Node {node_id}] {msg}")
 
             # Fire CDP mouse events (generates isTrusted:true!)
-            page.run_cdp('Input.dispatchMouseEvent',
-                type='mouseMoved', x=cx, y=cy, button='none')
-            time.sleep(0.1)
-            page.run_cdp('Input.dispatchMouseEvent',
-                type='mousePressed', x=cx, y=cy, button='left', buttons=1, clickCount=1)
+            page.run_cdp('Input.dispatchMouseEvent', type='mouseMoved', x=cx, y=cy, button='none')
+            time.sleep(0.05)
+            page.run_cdp('Input.dispatchMouseEvent', type='mousePressed', x=cx, y=cy, button='left', buttons=1, clickCount=1)
             time.sleep(0.02)
-            page.run_cdp('Input.dispatchMouseEvent',
-                type='mouseReleased', x=cx, y=cy, button='left', buttons=0, clickCount=1)
+            page.run_cdp('Input.dispatchMouseEvent', type='mouseReleased', x=cx, y=cy, button='left', buttons=0, clickCount=1)
 
-            time.sleep(2)
-
-            # Check if Cloudflare passed
-            # Success means "Just a moment" is gone AND we see login fields or quota page/url
-            html_now = safe_get(page, "html").lower()
-            url_now = safe_get(page, "url").lower()
-            
-            is_passed = 'just a moment' not in html_now and \
-                        ('email' in html_now or 'password' in html_now or 'wakda' in html_now or '/antrean' in url_now or '/users' in url_now)
-            
-            if is_passed:
-                msg = f"🎉 Cloudflare BERHASIL dilewati via CDP! (ratio {x_r},{y_r})"
-                logger_obj.info(msg)
-                if sync_broadcast and node_id:
-                    sync_broadcast(f"[Node {node_id}] {msg}")
-                return True
+            # Wait shorter and poll for success
+            for _ in range(5): # Wait up to 1s total after click
+                time.sleep(0.2)
+                html_now = safe_get(page, "html").lower()
+                url_now = safe_get(page, "url").lower()
+                is_passed = 'just a moment' not in html_now and \
+                            ('email' in html_now or 'password' in html_now or 'wakda' in html_now or '/antrean' in url_now or '/users' in url_now)
+                
+                if is_passed:
+                    msg = f"🎉 Cloudflare BERHASIL dilewati via CDP!"
+                    logger_obj.info(msg)
+                    if sync_broadcast and node_id:
+                        sync_broadcast(f"[Node {node_id}] {msg}")
+                    return True
 
         msg = "❌ Semua CDP click ratios gagal melewati Cloudflare."
         logger_obj.warning(msg)
@@ -596,12 +588,12 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
                 
         
         pass_inp = None
-        for _ in range(15): # 15 iterations of 1s = 15s (Faster!)
-            pass_inp = safe_ele(page, 'css:input[type="password"]', timeout=1)
+        for _ in range(75): # 75 * 0.2s = 15s (Ultra Fast Polling!)
+            pass_inp = safe_ele(page, 'css:input[type="password"]', timeout=0.1)
             if pass_inp:
                 break
             
-            # Proactive Cloudflare detection during the wait
+            # Proactive Cloudflare detection
             title = safe_get(page, "title").lower()
             if "just a moment" in title or "verifying your connection" in title:
                 sync_broadcast(f"[Node {node_id}] [{nama}] 🛡️ Cloudflare detected. Bypassing...")
@@ -609,38 +601,35 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
                 continue
             
             # Fast Modal/Splash cleanup
-            try:
-                handle_oops_modal(page, logger, sync_broadcast, node_id)
-                splash_close = page.ele('text:Tutup', timeout=0.1) or page.ele('css:.close', timeout=0.1)
-                if splash_close and splash_close.states.is_displayed:
-                    splash_close.click()
-            except: pass
+            handle_oops_modal(page, logger, sync_broadcast, node_id)
+            time.sleep(0.2)
 
         if not pass_inp:
-            sync_broadcast(f"[Node {node_id}] [{nama}] ❌ Login form not found. Restarting...")
-            try:
-                found_inputs = [f"{e.attr('name')} ({e.attr('type')})" for e in page.eles('tag:input')]
-                page_url = safe_get(page, "url")
-                sync_broadcast(f"[Node {node_id}] [{nama}] 🔍 DIAGNOSTIC Inputs: {', '.join(found_inputs)} | URL: {page_url}")
-            except:
-                pass
+            sync_broadcast(f"[Node {node_id}] [{nama}] ❌ Login form not found.")
             return False
         
-        email_inp = page.ele('@name=email') or page.ele('css:input[type="email"]') or page.ele('@name=username')
+        email_inp = safe_ele(page, '@name=email', timeout=0.1) or safe_ele(page, 'css:input[type="email"]', timeout=0.1)
         
-        if email_inp: 
-            try:
-                email_inp.clear()
-                email_inp.input(email)
-            except Exception as e:
-                logger.warning(f"Ignorable invalid element error for email: {e}")
+        sync_broadcast(f"[Node {node_id}] [{nama}] 🚀 Injecting credentials instanly...")
+        
+        # INSTANT JS INJECTION for Login (Fastest method)
+        login_data = {"email": email, "password": password}
+        page.run_js(f'''
+            var data = {login_data};
+            var eInp = document.querySelector('input[type="email"]') || document.querySelector('[name="email"]') || document.querySelector('[name="username"]');
+            var pInp = document.querySelector('input[type="password"]');
             
-        if pass_inp: 
-            try:
-                pass_inp.clear()
-                pass_inp.input(password)
-            except Exception as e:
-                logger.warning(f"Ignorable invalid element error for password: {e}")
+            if(eInp) {{
+                var setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+                setter.call(eInp, data.email);
+                eInp.dispatchEvent(new Event('input', {{ bubbles: true }}));
+            }}
+            if(pInp) {{
+                var setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+                setter.call(pInp, data.password);
+                pInp.dispatchEvent(new Event('input', {{ bubbles: true }}));
+            }}
+        ''')
         
         # Check and solve captcha
         solve_generic_math_captcha(page, logger, sync_broadcast, node_id)
@@ -748,7 +737,7 @@ def submit_booking(page: ChromiumPage, profile_data: Dict[str, str], location_id
                     }}
                 ''')
                 
-                time.sleep(1)
+                time.sleep(0.2)
                 submit_btn = safe_ele(page, 'text:Tampilkan Butik', timeout=1) or safe_ele(page, 'css:button[type="submit"]')
                 if submit_btn:
                     logger.info("[SNIPER] Clicking 'Tampilkan Butik'...")
