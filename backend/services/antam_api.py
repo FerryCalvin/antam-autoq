@@ -217,7 +217,7 @@ def check_quota(page: ChromiumPage, location_id: str, sync_broadcast=None, node_
     try:
     # Stricter CF Detection: Don't just look at HTML (Rocket Loader false positive), look at Title OR visible challenge iframe
         is_cf = ("just a moment" in title_lower or "verifying your connection" in title_lower) or \
-                (safe_ele(page, 'css:iframe[src*="challenges.cloudflare.com"]', timeout=0.5) and "challenges.cloudflare.com" in html_lower)
+                (safe_ele(page, 'css:iframe[src*="challenges.cloudflare.com"]', timeout=0.1) and "challenges.cloudflare.com" in html_lower)
         
         is_login = "/masuk" in page_url or "/login" in page_url or "/home" in page_url
         is_boutique = ("select" in html_lower and "tampilkan butik" in html_lower) or \
@@ -408,7 +408,7 @@ def solve_generic_math_captcha(page: ChromiumPage, logger_obj=logger, sync_broad
     try:
         # Global Stability Guard
         wait_for_stable(page)
-        time.sleep(0.1)
+        time.sleep(0.05)
         # 1. Direct approach: Find the input and its parent label/text
         math_input = safe_ele(page, 'css:input[placeholder*="Jawaban"]', timeout=1) or safe_ele(page, 'css:input[name*="captcha"]', timeout=1)
         if not math_input:
@@ -492,7 +492,7 @@ def solve_cloudflare_cdp(page: ChromiumPage, logger_obj=logger, sync_broadcast=N
         page.run_cdp('DOM.enable')
         
         iframe_node = None
-        for attempt in range(50): # 50 * 0.2s = 10s (Faster polling!)
+        for attempt in range(100): # 100 * 0.1s = 10s (Ultra Fast Polling!)
             result = page.run_cdp('DOM.getFlattenedDocument', depth=-1, pierce=True)
             nodes = result.get('nodes', [])
 
@@ -508,7 +508,7 @@ def solve_cloudflare_cdp(page: ChromiumPage, logger_obj=logger, sync_broadcast=N
             
             if iframe_node:
                 break
-            time.sleep(0.2)
+            time.sleep(0.1)
 
         if not iframe_node:
             msg = "Cloudflare Turnstile iframe not found in DOM."
@@ -547,14 +547,12 @@ def solve_cloudflare_cdp(page: ChromiumPage, logger_obj=logger, sync_broadcast=N
 
             # Fire CDP mouse events (generates isTrusted:true!)
             page.run_cdp('Input.dispatchMouseEvent', type='mouseMoved', x=cx, y=cy, button='none')
-            time.sleep(0.05)
             page.run_cdp('Input.dispatchMouseEvent', type='mousePressed', x=cx, y=cy, button='left', buttons=1, clickCount=1)
-            time.sleep(0.02)
             page.run_cdp('Input.dispatchMouseEvent', type='mouseReleased', x=cx, y=cy, button='left', buttons=0, clickCount=1)
 
-            # Wait shorter and poll for success
-            for _ in range(5): # Wait up to 1s total after click
-                time.sleep(0.2)
+            # Wait shorter and poll for success frequently
+            for _ in range(20): # Wait up to 1s total (Poll every 0.05s)
+                time.sleep(0.05)
                 html_now = safe_get(page, "html").lower()
                 url_now = safe_get(page, "url").lower()
                 is_passed = 'just a moment' not in html_now and \
