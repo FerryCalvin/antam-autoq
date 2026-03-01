@@ -272,15 +272,23 @@ def check_quota(page: ChromiumPage, location_id: str, sync_broadcast=None, node_
         if "/masuk" in page_url or "/login" in page_url or "/home" in page_url:
             return -1
         if "/users" in page_url:
-            # Enhanced Menu Antrean detection (Text or CSS color/property)
-            menu_btn = page.ele('text:Menu Antrean', timeout=2) or \
-                       page.ele('@@class*=btn@@text():Menu Antrean', timeout=1) or \
-                       page.ele('@@style*background-color: rgb(86, 44, 255)', timeout=0.5)
-            
-            if menu_btn and str(menu_btn.tag) != 'NoneElement':
-                logger.info(f"[Node {node_id}] [{nama or 'Bot'}] 🎯 Clicking 'Menu Antrean' from Profile Page...")
-                menu_btn.click()
-                page.wait.load_start(timeout=5)
+            for _ in range(3): # Retry navigation
+                try:
+                    # Enhanced Menu Antrean detection (Text or CSS color/property)
+                    menu_btn = page.ele('text:Menu Antrean', timeout=2) or \
+                               page.ele('@@class*=btn@@text():Menu Antrean', timeout=1) or \
+                               page.ele('@@style*background-color: rgb(86, 44, 255)', timeout=0.5)
+                    
+                    if menu_btn and str(menu_btn.tag) != 'NoneElement':
+                        sync_broadcast(f"[Node {node_id}] [{nama or 'Bot'}] 🎯 Navigating from Profile to Menu Antrean...")
+                        menu_btn.click()
+                        page.wait.load_start(timeout=5)
+                        break
+                except Exception as e:
+                    if "refreshed" in str(e).lower() or "loading" in str(e).lower():
+                        time.sleep(1)
+                        continue
+                    break
             
         if not page.wait.ele_displayed('select#wakda', timeout=15):
             title = safe_get(page, "title").lower()
