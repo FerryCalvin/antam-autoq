@@ -166,7 +166,7 @@ def handle_oops_modal(page, logger_obj=logger, sync_broadcast=None, node_id=None
         if oops_modal and oops_modal.states.is_displayed:
             # Fast check if it's captcha related
             if page.ele('text:reCAPTCHA', timeout=0.1) or page.ele('text:captcha', timeout=0.1):
-                msg = "⚠️ Modal 'Oops' terdeteksi (Masalah CAPTCHA). Menutup dan mencoba ulang..."
+                msg = "Oops modal detected (CAPTCHA Problem). Closing and retrying..."
                 logger_obj.warning(msg)
                 if sync_broadcast and node_id: sync_broadcast(f"[Node {node_id}] {msg}")
                 
@@ -221,18 +221,18 @@ def check_quota(page: ChromiumPage, location_id: str, sync_broadcast=None, node_
         # --- DYNAMIC STATUS REPORTING & EARLY CF EXIT ---
         if is_cf:
             if sync_broadcast and node_id:
-                sync_broadcast(f"[Node {node_id}] [{nama or 'Bot'}] 🛡️ Cloudflare active. Waiting for bypass...")
+                sync_broadcast(f"[Node {node_id}] [{nama or 'Bot'}] Cloudflare active. Waiting for bypass...")
             return -2
 
         if sync_broadcast and node_id:
             if is_announcement:
-                sync_broadcast(f"[Node {node_id}] [{nama or 'Bot'}] 📢 Announcement Pop-up detected.")
+                sync_broadcast(f"[Node {node_id}] [{nama or 'Bot'}] Announcement Pop-up detected.")
             elif is_login:
-                sync_broadcast(f"[Node {node_id}] [{nama or 'Bot'}] 🔑 On Login/Home page.")
+                sync_broadcast(f"[Node {node_id}] [{nama or 'Bot'}] On Login/Home page.")
             elif is_boutique:
-                sync_broadcast(f"[Node {node_id}] [{nama or 'Bot'}] 🏬 On Boutique Selection page.")
+                sync_broadcast(f"[Node {node_id}] [{nama or 'Bot'}] On Boutique Selection page.")
             elif is_quota_page:
-                sync_broadcast(f"[Node {node_id}] [{nama or 'Bot'}] ✅ On Quota Selection page.")
+                sync_broadcast(f"[Node {node_id}] [{nama or 'Bot'}] On Quota Selection page.")
 
         # --- SMART NAVIGATION ---
         # ONLY navigate if we are totally lost (not on any of the above pages)
@@ -251,7 +251,7 @@ def check_quota(page: ChromiumPage, location_id: str, sync_broadcast=None, node_
         # 1. Action Not Allowed (CSRF/Session Error)
         if "the action you have requested is not allowed" in html_lower or page.ele('text:An Error Was Encountered', timeout=1):
             if "not allowed" in html_lower:
-                msg = "⚠️ Session Error (Action Not Allowed) detected. Resetting..."
+                msg = "Session Error (Action Not Allowed) detected. Resetting..."
                 if sync_broadcast and node_id: sync_broadcast(f"[Node {node_id}] {msg}")
                 kembali_btn = page.ele('text:Kembali', timeout=1) or page.ele('tag:button@@text():Kembali')
                 if kembali_btn:
@@ -263,7 +263,7 @@ def check_quota(page: ChromiumPage, location_id: str, sync_broadcast=None, node_
         # 2. IP Blocking detection
         if "pemblokiran ip" in html_lower:
             if sync_broadcast and node_id:
-                sync_broadcast(f"[Node {node_id}] [{nama or 'Bot'}] ⛔ IP Blocked/Limit detected.")
+                sync_broadcast(f"[Node {node_id}] [{nama or 'Bot'}] IP Blocked/Limit detected.")
             return -3
             
         # --- BOUTIQUE AUTO-SELECTION BUSTER ---
@@ -313,7 +313,7 @@ def check_quota(page: ChromiumPage, location_id: str, sync_broadcast=None, node_
                                safe_ele(page, '@@style*background-color: rgb(86, 44, 255)', timeout=0.5)
                     
                     if menu_btn and str(menu_btn.tag) != 'NoneElement':
-                        sync_broadcast(f"[Node {node_id}] [{nama or 'Bot'}] 🎯 Navigating from Profile to Menu Antrean...")
+                        sync_broadcast(f"[Node {node_id}] [{nama or 'Bot'}] Navigating from Profile to Menu Antrean...")
                         menu_btn.click()
                         page.wait.load_start(timeout=5)
                         break
@@ -332,7 +332,7 @@ def check_quota(page: ChromiumPage, location_id: str, sync_broadcast=None, node_
             target_text = re.search(r'(antrean\s+dibuka|kembali)\s+pukul\s*(\d{1,2})[:.]?(\d{0,2})', h)
             if target_text and not is_active_page:
                 detected_hour = int(target_text.group(2))
-                logger.info(f"Jam operasional terdeteksi secara otomatis: Jam {detected_hour}")
+                logger.info(f"Opening hour detected automatically: Hour {detected_hour}")
                 page.run_js(f'window.__detected_opening_hour = {detected_hour}')
                 return -5 # CODE -5: Standby Mode (Night Mode)
 
@@ -351,7 +351,7 @@ def check_quota(page: ChromiumPage, location_id: str, sync_broadcast=None, node_
             return 0 
 
         if sync_broadcast and node_id:
-            sync_broadcast(f"[Node {node_id}] [{nama or 'Bot'}] ⏳ Extracting slots from dropdown...")
+            sync_broadcast(f"[Node {node_id}] [{nama or 'Bot'}] Extracting slots from dropdown...")
             
         # Jika berhasil sampai sini, hapus deteksi jam karena sudah buka
         page.run_js('window.__detected_opening_hour = null')
@@ -420,7 +420,7 @@ def solve_generic_math_captcha(page: ChromiumPage, logger_obj=logger, sync_broad
         
         logger_obj.info(f"Solved Math: {question} = {answer}")
         if sync_broadcast and node_id:
-            sync_broadcast(f"[Node {node_id}] 🧠 Solved Math: {question} = {answer}")
+            sync_broadcast(f"[Node {node_id}] Solved Math: {question} = {answer}")
         
         # Input answer
         if math_input:
@@ -469,10 +469,10 @@ def solve_cloudflare_cdp(page: ChromiumPage, logger_obj=logger, sync_broadcast=N
                        ("challenges.cloudflare.com" in html and not ("email" in html or "password" in html or "wakda" in html))
 
         if not is_active_cf:
-            logger_obj.info("✅ Cloudflare challenge not active (Title check passed). Skipping CDP.")
+            logger_obj.info("Cloudflare challenge not active (Title check passed). Skipping CDP.")
             return True
 
-        msg = "🔍 Mencari iframe Cloudflare Turnstile via CDP..."
+        msg = "Searching for Cloudflare Turnstile iframe via CDP..."
 
         # Step 1: Enable DOM and find the Turnstile iframe (with retry)
         page.run_cdp('DOM.enable')
@@ -497,13 +497,13 @@ def solve_cloudflare_cdp(page: ChromiumPage, logger_obj=logger, sync_broadcast=N
             time.sleep(0.2)
 
         if not iframe_node:
-            msg = "❌ Iframe Cloudflare Turnstile tidak ditemukan di DOM."
+            msg = "Cloudflare Turnstile iframe not found in DOM."
             logger_obj.warning(msg)
             if sync_broadcast and node_id:
                 sync_broadcast(f"[Node {node_id}] {msg}")
             return False
 
-        logger_obj.info(f"✅ Turnstile iframe found (nodeId={iframe_node['nodeId']})")
+        logger_obj.info(f"Turnstile iframe found (nodeId={iframe_node['nodeId']})")
 
         # Step 2: Get iframe box model coordinates
         box = page.run_cdp('DOM.getBoxModel', nodeId=iframe_node['nodeId'])
@@ -526,7 +526,7 @@ def solve_cloudflare_cdp(page: ChromiumPage, logger_obj=logger, sync_broadcast=N
             cx = x_start + (iframe_w * x_r)
             cy = y_start + (iframe_h * y_r)
 
-            msg = f"🎯 CDP Click #{idx+1}: ({cx:.0f},{cy:.0f})"
+            msg = f"CDP Click #{idx+1}: ({cx:.0f},{cy:.0f})"
             logger_obj.info(msg)
             if sync_broadcast and node_id:
                 sync_broadcast(f"[Node {node_id}] {msg}")
@@ -547,13 +547,13 @@ def solve_cloudflare_cdp(page: ChromiumPage, logger_obj=logger, sync_broadcast=N
                             ('email' in html_now or 'password' in html_now or 'wakda' in html_now or '/antrean' in url_now or '/users' in url_now)
                 
                 if is_passed:
-                    msg = f"🎉 Cloudflare BERHASIL dilewati via CDP!"
+                    msg = f"Cloudflare SUCCESSFULLY bypassed via CDP!"
                     logger_obj.info(msg)
                     if sync_broadcast and node_id:
                         sync_broadcast(f"[Node {node_id}] {msg}")
                     return True
 
-        msg = "❌ Semua CDP click ratios gagal melewati Cloudflare."
+        msg = "All CDP click ratios failed to bypass Cloudflare."
         logger_obj.warning(msg)
         if sync_broadcast and node_id:
             sync_broadcast(f"[Node {node_id}] {msg}")
@@ -570,7 +570,7 @@ def solve_cloudflare_cdp(page: ChromiumPage, logger_obj=logger, sync_broadcast=N
 
 def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, node_id: int, nama: str) -> bool:
     """Automates the login sequence if the bot gets redirected to /masuk."""
-    sync_broadcast(f"[Node {node_id}] [{nama}] 🤖 Handling Auto-Login sequence...")
+    sync_broadcast(f"[Node {node_id}] [{nama}] Handling Auto-Login sequence...")
     
     # Global Stability Guard
     wait_for_stable(page)
@@ -578,7 +578,7 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
     try:
         # Handle the /home redirect trap
         if "/home" in page.url or page.url.rstrip('/') == "https://antrean.logammulia.com":
-            sync_broadcast(f"[Node {node_id}] [{nama}] 🏠 Bypassing Homepage/Announcement...")
+            sync_broadcast(f"[Node {node_id}] [{nama}] Bypassing Homepage/Announcement...")
             login_btn = safe_ele(page, 'text:Log In', timeout=2) or safe_ele(page, 'text:Login', timeout=2)
             if login_btn:
                 try: login_btn.click()
@@ -596,7 +596,7 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
             # Proactive Cloudflare detection
             title = safe_get(page, "title").lower()
             if "just a moment" in title or "verifying your connection" in title:
-                sync_broadcast(f"[Node {node_id}] [{nama}] 🛡️ Cloudflare detected. Bypassing...")
+                sync_broadcast(f"[Node {node_id}] [{nama}] Cloudflare detected. Bypassing...")
                 solve_cloudflare_cdp(page, logger, sync_broadcast, node_id)
                 continue
             
@@ -605,12 +605,12 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
             time.sleep(0.2)
 
         if not pass_inp:
-            sync_broadcast(f"[Node {node_id}] [{nama}] ❌ Login form not found.")
+            sync_broadcast(f"[Node {node_id}] [{nama}] Login form not found.")
             return False
         
         email_inp = safe_ele(page, '@name=email', timeout=0.1) or safe_ele(page, 'css:input[type="email"]', timeout=0.1)
         
-        sync_broadcast(f"[Node {node_id}] [{nama}] 🚀 Injecting credentials instanly...")
+        sync_broadcast(f"[Node {node_id}] [{nama}] Injecting credentials instantly...")
         
         # INSTANT JS INJECTION for Login (Fastest method)
         login_data = {"email": email, "password": password}
@@ -634,7 +634,7 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
         # Check and solve captcha
         solve_generic_math_captcha(page, logger, sync_broadcast, node_id)
         
-        sync_broadcast(f"[Node {node_id}] [{nama}] 🚀 Submitting login credentials...")
+        sync_broadcast(f"[Node {node_id}] [{nama}] Submitting login credentials...")
         
         # NATIVE TRUSTED CLICK: Turnstile requires a real browser event, not a JS generated synthetic event
         try:
@@ -659,7 +659,7 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
         # Only verify success if the password field is no longer on the screen
         page_url = safe_get(page, "url")
         if not safe_ele(page, 'css:input[type="password"]', timeout=0.5):
-            sync_broadcast(f"[Node {node_id}] [{nama}] ✅ Auto-Login Successful! Returning to Quota Target...")
+            sync_broadcast(f"[Node {node_id}] [{nama}] Auto-Login Successful! Returning to Quota Target...")
             
             # If immediately dumped to the profile page, proactively redirect to the queue page
             if "/users" in page_url:
@@ -670,7 +670,7 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
                            safe_ele(page, '@@style*background-color: rgb(86, 44, 255)', timeout=0.5)
                 
                 if menu_btn and str(menu_btn.tag) != 'NoneElement':
-                    sync_broadcast(f"[Node {node_id}] [{nama}] 🎯 Navigating from Profile to Menu Antrean...")
+                    sync_broadcast(f"[Node {node_id}] [{nama}] Navigating from Profile to Menu Antrean...")
                     menu_btn.click()
                     page.wait.load_start(timeout=5)
             
@@ -680,11 +680,11 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
             if handle_oops_modal(page, logger, sync_broadcast, node_id):
                 return False # Let the caller retry
                 
-            sync_broadcast(f"[Node {node_id}] [{nama}] ❌ Login Form still present (Wrong Password/Captcha?). Retrying...")
+            sync_broadcast(f"[Node {node_id}] [{nama}] Login Form still present (Wrong Password/Captcha?). Retrying...")
             return False
             
     except Exception as e:
-        sync_broadcast(f"[Node {node_id}] [{nama}] ⚠️ Login automation error: {e}")
+        sync_broadcast(f"[Node {node_id}] [{nama}] Login automation error: {e}")
         return False
 
 def submit_booking(page: ChromiumPage, profile_data: Dict[str, str], location_id: str) -> Dict[str, Any]:
@@ -776,7 +776,7 @@ def submit_booking(page: ChromiumPage, profile_data: Dict[str, str], location_id
         logger.info(f"[SNIPER] Selected slot value: {target_wakda_value}")
         
         # 3. Fill the inputs (INSTANT INJECTION MODE)
-        logger.info("[SNIPER] Mengisi formulir secara instan...")
+        logger.info("[SNIPER] Filling form instantly...")
         try:
             # Gunakan JavaScript untuk mengisi semua field sekaligus agar jauh lebih cepat dibanding mengetik manual
             form_payload = {
@@ -838,7 +838,7 @@ def submit_booking(page: ChromiumPage, profile_data: Dict[str, str], location_id
             
             time.sleep(2) # Wait for render
             page.get_screenshot(path=screenshot_path, full_page=True)
-            logger.info(f"[SNIPER] 📸 Ticket Screenshot Saved: {screenshot_path}")
+            logger.info(f"[SNIPER] Ticket Screenshot Saved: {screenshot_path}")
         
         return {
             "success": is_success,
@@ -874,7 +874,7 @@ def run_drission_bot_loop(node_id: int, config: Dict[str, Any], sync_broadcast, 
                 quota = check_quota(page, target_location, sync_broadcast, node_id, nama_lengkap)
                 
                 if quota > 0:
-                    sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🟢 SUCCESS: Found {quota} slots! Triggering Sniper...")
+                    sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] SUCCESS: Found {quota} slots! Triggering Sniper...")
                     config_payload = {
                         "nama_lengkap": config['nama_lengkap'],
                         "nik": config['nik'],
@@ -884,7 +884,7 @@ def run_drission_bot_loop(node_id: int, config: Dict[str, Any], sync_broadcast, 
                     res = submit_booking(page, config_payload, target_location)
                     
                     if res.get("success"):
-                       sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🏆 BOOKING SUCCESSFUL! URL: {res.get('url')}")
+                       sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] BOOKING SUCCESSFUL! URL: {res.get('url')}")
                        
                        # --- KILL SWITCH (Synchronous thread version) ---
                        kill_targets = []
@@ -895,10 +895,10 @@ def run_drission_bot_loop(node_id: int, config: Dict[str, Any], sync_broadcast, 
                        for t_id in kill_targets:
                            nodes_ref[t_id]["task"].cancel()
                            del nodes_ref[t_id]
-                           sync_broadcast(f"[System] 🛑 KILL SWITCH ACTIVATED: Node {t_id} stopped because NIK {nik} already secured a booking.")
+                           sync_broadcast(f"[System] KILL SWITCH ACTIVATED: Node {t_id} stopped because NIK {nik} already secured a booking.")
 
                     else:
-                       sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🔴 SNIPER FAILED: {res.get('error')}")
+                       sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] SNIPER FAILED: {res.get('error')}")
                        
                     break # Stop looping after sniper execution
 
@@ -911,12 +911,12 @@ def run_drission_bot_loop(node_id: int, config: Dict[str, Any], sync_broadcast, 
                     continue 
                     
                 elif quota == -3:
-                    sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] ⛔ PEMBLOKIRAN IP TERDETEKSI! Cooldown 3 menit...")
+                    sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] IP BLOCKED/LIMIT DETECTED! Cooling down for 3 minutes...")
                     time.sleep(180)
                     continue
                     
                 elif quota == -4:
-                    sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] ⚠️ Browser lost! Requesting fresh instance...")
+                    sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] Browser lost! Requesting fresh instance...")
                     try: page.quit()
                     except: pass
                     time.sleep(2)
@@ -929,18 +929,18 @@ def run_drission_bot_loop(node_id: int, config: Dict[str, Any], sync_broadcast, 
                         opening_hour = int(detected_h)
                         current_hour = datetime.datetime.today().hour
                         if current_hour < opening_hour:
-                            sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🌙 Standby: Jam {opening_hour} (Sekarang jam {current_hour}). Tidur 5 menit...")
+                            sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] Standby: Opening at {opening_hour} (Current hour {current_hour}). Sleeping for 5 minutes...")
                             time.sleep(300)
                         else:
-                            sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🕒 Jam buka mendekat. Standby tiap 10 detik...")
+                            sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] Opening hour approaching. Standby every 10 seconds...")
                             time.sleep(10)
                     else:
-                        sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] ⚠️ Standby unknown. Refreshing in 30s...")
+                        sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] Standby unknown. Refreshing in 30s...")
                         time.sleep(30)
                     continue
 
                 elif quota == -6:
-                    sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🟡 Jadwal belum tersedia. Cek tiap 20 detik...")
+                    sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] Schedule not yet available. Checking every 20 seconds...")
                     time.sleep(20)
                     continue
                     
@@ -949,22 +949,22 @@ def run_drission_bot_loop(node_id: int, config: Dict[str, Any], sync_broadcast, 
                     title_final = safe_get(page, "title").lower()
                     if "just a moment" in title_final or "verifying your connection" in title_final or \
                        safe_ele(page, 'css:iframe[src*="challenges.cloudflare.com"]', timeout=0.1):
-                        sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🛡️ Cloudflare detected (Last-Resort). Bypassing...")
+                        sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] Cloudflare detected (Last-Resort). Bypassing...")
                         solve_cloudflare_cdp(page, logger, sync_broadcast, node_id)
                         time.sleep(2)
                         continue
 
-                    sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🔴 Quota full. Retrying in 10s...")
+                    sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] Quota full. Retrying in 10s...")
                     time.sleep(10)
                     continue
 
             except Exception as e:
                 msg = str(e).lower()
                 if "refreshed" in msg or "loading" in msg or "disconnected" in msg or "targetclosed" in msg:
-                    sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🔄 Page refreshed/refreshed state detected. Standing by...")
+                    sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] Page refreshed state detected. Standing by...")
                     time.sleep(2)
                     continue
-                sync_broadcast(f"[Node {node_id}] 🔴 Critical Loop Error: {str(e)}")
+                sync_broadcast(f"[Node {node_id}] Critical Loop Error: {str(e)}")
                 time.sleep(5)
                 continue
     finally:
