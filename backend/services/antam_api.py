@@ -292,11 +292,10 @@ def check_quota(page: ChromiumPage, location_id: str, sync_broadcast=None, node_
                 page.run_js(f'window.__detected_opening_hour = {detected_hour}')
                 return -5 # CODE -5: Standby Mode (Night Mode)
 
-            # 2. Strict CF verification again
-            if "just a moment" in title or "verifying your connection" in title or \
-               (page.ele('css:iframe[src*="challenges.cloudflare.com"]', timeout=0.5) and "challenges.cloudflare.com" in h):
-                return -2
-            
+            # 3. Detection for "Schedule Not Available" (New Requirement)
+            if "kuota antrean tidak tersedia" in h:
+                return -6 # CODE -6: Schedule not yet available/released
+                
             page_url = safe_get(page, "url")
             if "/masuk" in page_url or "/login" in page_url or "/home" in page_url:
                 return -1
@@ -901,6 +900,12 @@ def run_drission_bot_loop(node_id: int, config: Dict[str, Any], sync_broadcast, 
                     # Do NOT sleep for 5 minutes. Just a moderate refresh.
                     sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] ⚠️ Standby detected but hour unknown. Refreshing in 30s...")
                     time.sleep(30)
+                continue
+
+            elif quota == -6:
+                # Schedule NOT YET RELEASED (Admin hasn't set it up)
+                sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] 🟡 Jadwal belum tersedia (Belum dirilis admin). Cek tiap 20 detik...")
+                time.sleep(20)
                 continue
                 
             else:
