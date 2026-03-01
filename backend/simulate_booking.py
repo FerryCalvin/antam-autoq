@@ -52,8 +52,10 @@ async def run_simulation():
             page.wait.url_change("/users", timeout=60)
             
         print("✅ Login detected. Redirecting to Boutique Selection...")
-        site_id = "SUB-01" # Surabaya 1 Darmo
-        page.get(f"https://antrean.logammulia.com/antrean?site=SUB-01")
+        # Use the numeric site_id from LOCATION_CODE_TO_SITE_ID mapping for SUB-01
+        site_id = "13" 
+        target_url = f"https://antrean.logammulia.com/antrean?site={site_id}"
+        page.get(target_url)
         
         print("\n🔥 WE ARE ON THE TARGET PAGE.")
         print("I will now SIMULATE quota discovery and trigger high-speed JS submission.")
@@ -69,42 +71,70 @@ async def run_simulation():
         
         print("🚀 EXECUTING SNIPER NOW!")
         
+        # Anti-Reload Protection: Temporarily override page.get to prevent DOM clearing during simulation
+        page.run_js('window.__original_get = page.get; window.page_get_blocked = true;')
+        
         # We MUST inject the dummy option BEFORE calling submit_booking
-        # so that it passes the initial 'select#wakda' display check.
         page.run_js('''
             var sel = document.querySelector('select#wakda');
             if(!sel) {
-                // Create a VISIBLE dummy select to pass .ele_displayed() check
                 sel = document.createElement('select');
                 sel.id = 'wakda';
+                sel.name = 'wakda';
                 sel.style.position = 'fixed';
-                sel.style.top = '50%';
-                sel.style.left = '50%';
-                sel.style.width = '200px';
-                sel.style.height = '40px';
+                sel.style.top = '10%';
+                sel.style.left = '10%';
+                sel.style.width = '300px';
+                sel.style.height = '50px';
                 sel.style.zIndex = '10000';
-                sel.style.border = '2px solid red';
+                sel.style.border = '5px solid red';
+                sel.style.fontSize = '20px';
                 sel.style.display = 'block';
                 sel.style.visibility = 'visible';
                 document.body.appendChild(sel);
             }
-            // Clear existing and add simulation option
+            // Clear and add realistic simulation option (must NOT contain "tersedia 0/")
             sel.innerHTML = ''; 
             var opt = document.createElement('option');
-            opt.value = "SIMULATION_VALUE";
-            opt.text = "08:00 - 09:00 (Simulation)";
+            opt.value = "SIMULASI_VAL_123";
+            opt.text = "08:00 - 09:00 (Tersedia 5/50)";
             sel.add(opt);
-            sel.value = "SIMULATION_VALUE";
+            sel.value = "SIMULASI_VAL_123";
             
+            // Inject dummy inputs if they don't exist
+            ['nama', 'nik', 'phone', 'email'].forEach(name => {
+                if(!document.querySelector('[name="' + name + '"]')) {
+                    let inp = document.createElement('input');
+                    inp.name = name;
+                    inp.type = 'hidden';
+                    document.body.appendChild(inp);
+                }
+            });
+
+            // Inject dummy "Lanjut" button
+            if(!document.getElementById('sim-submit')) {
+                let btn = document.createElement('button');
+                btn.id = 'sim-submit';
+                btn.textContent = 'Lanjut';
+                btn.style = "position:fixed; bottom:10%; right:10%; padding:20px; font-size:20px; z-index:10000; background:green; color:white;";
+                btn.onclick = function() { console.log('Simulated Submit Clicked'); };
+                document.body.appendChild(btn);
+            }
+
             // Highlight for visibility
-            var msg = document.createElement('div');
-            msg.innerHTML = '<h1 style="color:red; background:white; position:fixed; top:40%; left:50%; z-index:10001; padding:20px; border:3px solid red;">🔥 SIMULASI KUOTA AKTIF! 🔥</h1>';
-            document.body.appendChild(msg);
+            var msg = document.getElementById('simulation-msg');
+            if(!msg) {
+                msg = document.createElement('div');
+                msg.id = 'simulation-msg';
+                msg.style = "color:red; background:white; position:fixed; top:30%; left:50%; transform:translateX(-50%); z-index:10001; padding:20px; border:3px solid red; font-size:24px; font-weight:bold;";
+                document.body.appendChild(msg);
+            }
+            msg.innerHTML = '🔥 SIMULASI KUOTA AKTIF! 🔥<br><small>Menjalankan Sniper dalam 1 detik...</small>';
             
             sel.dispatchEvent(new Event('change', { bubbles: true }));
         ''')
         
-        time.sleep(1) # Let DOM settle
+        time.sleep(1.5) # Let DOM settle
         start_time = time.time()
         res = submit_booking(page, config_payload, site_id)
         
