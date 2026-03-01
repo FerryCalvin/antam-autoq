@@ -269,8 +269,13 @@ def check_quota(page: ChromiumPage, location_id: str, sync_broadcast=None, node_
         if "/masuk" in page_url or "/login" in page_url or "/home" in page_url:
             return -1
         if "/users" in page_url:
-            menu_btn = page.ele('text:Menu Antrean', timeout=2)
+            # Enhanced Menu Antrean detection (Text or CSS color/property)
+            menu_btn = page.ele('text:Menu Antrean', timeout=2) or \
+                       page.ele('@@class*=btn@@text():Menu Antrean', timeout=1) or \
+                       page.ele('@@style*background-color: rgb(86, 44, 255)', timeout=0.5)
+            
             if menu_btn and str(menu_btn.tag) != 'NoneElement':
+                logger.info(f"[Node {node_id}] [{nama or 'Bot'}] 🎯 Clicking 'Menu Antrean' from Profile Page...")
                 menu_btn.click()
                 page.wait.load_start(timeout=5)
             
@@ -632,8 +637,13 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
             
             # If immediately dumped to the profile page, proactively redirect to the queue page
             if "/users" in page_url:
-                menu_btn = page.ele('text:Menu Antrean', timeout=2)
+                # Proactive navigation for purple button
+                menu_btn = page.ele('text:Menu Antrean', timeout=2) or \
+                           page.ele('@@class*=btn@@text():Menu Antrean', timeout=1) or \
+                           page.ele('@@style*background-color: rgb(86, 44, 255)', timeout=0.5)
+                
                 if menu_btn and str(menu_btn.tag) != 'NoneElement':
+                    sync_broadcast(f"[Node {node_id}] [{nama}] 🎯 Navigating from Profile to Menu Antrean...")
                     menu_btn.click()
                     page.wait.load_start(timeout=5)
             
@@ -691,10 +701,29 @@ def submit_booking(page: ChromiumPage, profile_data: Dict[str, str], location_id
             except Exception as e:
                 logger.warning(f"[SNIPER] Boutique bypass error: {e}")
             
-        # Final wait for dropdown
         if not page.wait.ele_displayed('select#wakda', timeout=20):
-             logger.error("[SNIPER] Failed: Select dropdown never loaded.")
-             return {"success": False, "error": "Select dropdown never loaded during sniper execution."}
+             # Check if we are still on /users and try to rescue
+             page_url = safe_get(page, "url")
+             if "/users" in page_url:
+                 logger.info("[SNIPER] Currently on Profile page. Retrying Boutique selection via Menu button...")
+                 menu_btn = page.ele('text:Menu Antrean', timeout=2) or \
+                            page.ele('@@class*=btn@@text():Menu Antrean', timeout=1) or \
+                            page.ele('@@style*background-color: rgb(86, 44, 255)', timeout=0.5)
+                 if menu_btn:
+                     menu_btn.click()
+                     page.wait.load_start(timeout=5)
+                     # Final try to find Wakda
+                     if page.wait.ele_displayed('select#wakda', timeout=10):
+                         pass # Continued below
+                     else:
+                        logger.error("[SNIPER] Failed: Still cannot find select#wakda after Menu redirect.")
+                        return {"success": False, "error": "Select dropdown never loaded during sniper execution."}
+                 else:
+                    logger.error("[SNIPER] Failed: Select dropdown never loaded.")
+                    return {"success": False, "error": "Select dropdown never loaded during sniper execution."}
+             else:
+                logger.error("[SNIPER] Failed: Select dropdown never loaded.")
+                return {"success": False, "error": "Select dropdown never loaded during sniper execution."}
         
         # 2. Find best available slot
         select_wakda = page.ele('select#wakda')

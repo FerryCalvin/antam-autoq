@@ -52,6 +52,18 @@ async def run_simulation():
             page.wait.url_change("/users", timeout=60)
             
         print("✅ Login detected. Redirecting to Boutique Selection...")
+        
+        # Proactive: if landing on /users profile page, click 'Menu Antrean'
+        if "/users" in page.url:
+            print("📍 Landed on Profile page. Navigating to Menu Antrean...")
+            # Try to find the purple button by text or specific color
+            menu_btn = page.ele('text:Menu Antrean', timeout=3) or \
+                       page.ele('@@class*=btn@@text():Menu Antrean', timeout=1) or \
+                       page.ele('@@style*background-color: rgb(86, 44, 255)', timeout=0.5)
+            if menu_btn:
+                menu_btn.click()
+                page.wait.load_start(timeout=5)
+
         # Use the numeric site_id from LOCATION_CODE_TO_SITE_ID mapping for SUB-01
         site_id = "13" 
         target_url = f"https://antrean.logammulia.com/antrean?site={site_id}"
