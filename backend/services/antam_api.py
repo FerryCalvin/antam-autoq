@@ -161,20 +161,30 @@ def safe_run_js(page, script, retries=5):
 def handle_oops_modal(page, logger_obj=logger, sync_broadcast=None, node_id=None):
     """Detects and closes the 'Oops' error modal if reCAPTCHA or other errors occur."""
     try:
-        # Looking for the "Oops" modal seen in screenshot (VERY FAST CHECK)
-        oops_modal = page.ele('text:Oops', timeout=0.1)
-        if oops_modal and oops_modal.states.is_displayed:
-            # Fast check if it's captcha related
-            if page.ele('text:reCAPTCHA', timeout=0.1) or page.ele('text:captcha', timeout=0.1):
-                msg = "Oops modal detected (CAPTCHA Problem). Closing and retrying..."
+        # Looking for the "Oops" modal (SweetAlert2 title or general text)
+        oops_modal = safe_ele(page, 'css:.swal2-title', timeout=0.1) or safe_ele(page, 'text:Oops', timeout=0.1)
+        
+        if oops_modal:
+            html_text = safe_get(page, "html").lower()
+            if "recaptcha" in html_text or "captcha" in html_text:
+                msg = "Oops modal detected (CAPTCHA Problem). Dismissing..."
                 logger_obj.warning(msg)
                 if sync_broadcast and node_id: sync_broadcast(f"[Node {node_id}] {msg}")
                 
-                ok_btn = page.ele('text:OK', timeout=0.5) or page.ele('css:button.swal2-confirm', timeout=0.5)
-                if ok_btn: 
-                    ok_btn.click()
+                # Try clicking OK button natively
+                ok_btn = safe_ele(page, 'text:OK', timeout=0.5) or \
+                         safe_ele(page, 'css:button.swal2-confirm', timeout=0.5) or \
+                         safe_ele(page, 'css:.swal2-actions button', timeout=0.5)
                 
-                # Refresh to start clean
+                if ok_btn: 
+                    try: ok_btn.click()
+                    except: pass
+                
+                # JS Fallback: Force close SweetAlert2 if it exists
+                page.run_js('if(typeof Swal !== "undefined") Swal.close();')
+                
+                # Refresh to start clean after a captcha failure
+                time.sleep(1)
                 page.refresh()
                 return True
     except:
@@ -218,6 +228,10 @@ def check_quota(page: ChromiumPage, location_id: str, sync_broadcast=None, node_
         # ACTIVE PAGE GUARD: If we are on login or boutique selection, we are NOT in night mode.
         is_active_page = is_login or is_boutique or is_quota_page
         
+        # PROACTIVE ERROR HANDLING
+        if handle_oops_modal(page, logger, sync_broadcast, node_id):
+            return 0 # Immediate retry if modal cleared
+            
         # --- DYNAMIC STATUS REPORTING & EARLY CF EXIT ---
         if is_cf:
             if sync_broadcast and node_id:
@@ -651,14 +665,22 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
             logger.warning(f"Native trusted form submit failed: {e}")
             pass_inp.input('\n')
         
-        # Wait for redirect
-        page.wait.load_start(timeout=5)
-        # Dynamic wait for URL change or absence of password field
-        page.wait.ele_deleted('css:input[type="password"]', timeout=10)
+        # WAIT FOR SUCCESS OR ERROR MODAL (PROACTIVE POLLING)
+        success = False
+        for _ in range(50): # 10 seconds total (Poll every 0.2s)
+            # 1. Check for Oops modal (FAILURE)
+            if handle_oops_modal(page, logger, sync_broadcast, node_id):
+                return False # Modal handled the refresh, let the caller retry auto_login
+            
+            # 2. Check if login form is gone (SUCCESS)
+            if not safe_ele(page, 'css:input[type="password"]', timeout=0.1):
+                success = True
+                break
+                
+            time.sleep(0.2)
         
-        # Only verify success if the password field is no longer on the screen
-        page_url = safe_get(page, "url")
-        if not safe_ele(page, 'css:input[type="password"]', timeout=0.5):
+        if success:
+            page_url = safe_get(page, "url")
             sync_broadcast(f"[Node {node_id}] [{nama}] Auto-Login Successful! Returning to Quota Target...")
             
             # If immediately dumped to the profile page, proactively redirect to the queue page
@@ -676,13 +698,8 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
             
             return True
         else:
-            # CHECK FOR OOPS MODAL
-            if handle_oops_modal(page, logger, sync_broadcast, node_id):
-                return False # Let the caller retry
-                
-            sync_broadcast(f"[Node {node_id}] [{nama}] Login Form still present (Wrong Password/Captcha?). Retrying...")
+            sync_broadcast(f"[Node {node_id}] [{nama}] Login Form still present (Timeout/Wrong Password). Retrying...")
             return False
-            
     except Exception as e:
         sync_broadcast(f"[Node {node_id}] [{nama}] Login automation error: {e}")
         return False
