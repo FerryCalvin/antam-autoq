@@ -671,7 +671,7 @@ def submit_booking(page: ChromiumPage, profile_data: Dict[str, str], location_id
         has_site = page.ele('select#site', timeout=0.3) or page.ele('@@name=site', timeout=0.1)
         
         # If we see any of these, TRUST the page and skip navigation (Crucial for Simulation)
-        if (has_wakda and has_wakda.is_displayed()) or (has_site and has_site.is_displayed()):
+        if (has_wakda and has_wakda.states.is_displayed) or (has_site and has_site.states.is_displayed):
              logger.info(f"[SNIPER] State recognized (wakda={bool(has_wakda)}, site={bool(has_site)}). Skipping initial navigation.")
         else:
             page_url = safe_get(page, "url")
