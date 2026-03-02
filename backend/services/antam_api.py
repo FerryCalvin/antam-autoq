@@ -578,11 +578,9 @@ def solve_cloudflare_cdp(page: ChromiumPage, logger_obj=logger, sync_broadcast=N
             page.run_cdp('Input.dispatchMouseEvent', type='mousePressed', x=cx, y=cy, button='left', buttons=1, clickCount=1)
             page.run_cdp('Input.dispatchMouseEvent', type='mouseReleased', x=cx, y=cy, button='left', buttons=0, clickCount=1)
 
-        # 6. WAIT FOR SUCCESS
-        # Wait shorter and poll for success frequently (0.05s intervals)
-        for _ in range(50): 
-            time.sleep(0.05)
-            # Check iframe content directly via CDP for "Success!" (Highest Reliability)
+        # 6. WAIT FOR SUCCESS (Hyper-Fast Polling: 20Hz)
+        for _ in range(60): # 3.0s max wait (Poll every 0.05s)
+            # 6.1 Check iframe content directly via CDP for "Success!" (Highest Reliability)
             try:
                 iframe_doc = page.run_cdp('DOM.getFlattenedDocument', depth=-1, pierce=True)
                 iframe_nodes = iframe_doc.get('nodes', [])
@@ -593,13 +591,15 @@ def solve_cloudflare_cdp(page: ChromiumPage, logger_obj=logger, sync_broadcast=N
             except:
                 pass
             
-            # Check main page HTML/Title (Secondary)
+            # 6.2 Check main page state
             html_now = page.html.lower()
             if 'just a moment' not in html_now and \
                'verifying your connection' not in html_now and \
                ('challenges.cloudflare.com' not in html_now or "success!" in html_now):
                 logger_obj.info("Cloudflare bypass verified via page state.")
                 return True
+                
+            time.sleep(0.05)
 
         msg = "All CDP click ratios failed to bypass Cloudflare."
         logger_obj.warning(msg)
@@ -642,8 +642,8 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
                 
         
         pass_inp = None
-        for _ in range(150): # 15s (Faster Polling! 0.1s intervals)
-            pass_inp = safe_ele(page, 'css:input[type="password"]', timeout=0.05)
+        for _ in range(300): # 15s (Hyper Fast Polling! 0.05s intervals)
+            pass_inp = safe_ele(page, 'css:input[type="password"]', timeout=0.01)
             if pass_inp:
                 break
             
@@ -652,14 +652,12 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
             if "just a moment" in title or "verifying your connection" in title or "challenges.cloudflare.com" in page.html.lower():
                 sync_broadcast(f"[Node {node_id}] [{nama}] Cloudflare detected. Bypassing...")
                 if solve_cloudflare_cdp(page, logger, sync_broadcast, node_id):
-                    # If solved, try finding the input immediately
-                    pass_inp = safe_ele(page, 'css:input[type="password"]', timeout=0.5)
-                    if pass_inp: break
-                continue
+                    # If solved, break immediately and let the outer loop try finding the input
+                    continue
             
             # Fast Modal/Splash cleanup
             handle_oops_modal(page, logger, sync_broadcast, node_id)
-            time.sleep(0.1)
+            time.sleep(0.05)
 
         if not pass_inp:
             sync_broadcast(f"[Node {node_id}] [{nama}] Login form not found.")
