@@ -495,9 +495,20 @@ def solve_cloudflare_cdp(page: ChromiumPage, logger_obj=logger, sync_broadcast=N
                        ("challenges.cloudflare.com" in html and not ("wakda" in html or "/antrean" in page.url))
         
         # Check if already solved (green checkmark)
-        if "success!" in html and not is_active_cf:
+        if ("success!" in html or "success!" in title) and not is_active_cf:
              logger_obj.info("Cloudflare already verified ('Success!' detected).")
              return True
+             
+        # Check iframe internal state again for safety
+        try:
+            iframe_doc = page.run_cdp('DOM.getFlattenedDocument', depth=-1, pierce=True)
+            iframe_nodes = iframe_doc.get('nodes', [])
+            iframe_text = "".join([n.get('nodeValue', '') for n in iframe_nodes if n.get('nodeName') == '#text']).lower()
+            if "success!" in iframe_text:
+                logger_obj.info("Cloudflare already verified via IFRAME internal text.")
+                return True
+        except:
+            pass
 
         if not is_active_cf:
             logger_obj.info("Cloudflare challenge not active (Title check passed). Skipping CDP.")
@@ -567,34 +578,34 @@ def solve_cloudflare_cdp(page: ChromiumPage, logger_obj=logger, sync_broadcast=N
             page.run_cdp('Input.dispatchMouseEvent', type='mousePressed', x=cx, y=cy, button='left', buttons=1, clickCount=1)
             page.run_cdp('Input.dispatchMouseEvent', type='mouseReleased', x=cx, y=cy, button='left', buttons=0, clickCount=1)
 
-            # Wait shorter and poll for success frequently
-            for _ in range(25): # Wait up to 1.25s total (Poll every 0.05s)
-                time.sleep(0.05)
-                # Check main page
-                html_now = page.html.lower()
-                url_now = page.url.lower()
-                
-                # Check iframe content directly via CDP for "Success!"
-                # This is more reliable than main page HTML
-                try:
-                    iframe_doc = page.run_cdp('DOM.getFlattenedDocument', depth=-1, pierce=True)
-                    iframe_nodes = iframe_doc.get('nodes', [])
-                    iframe_text = "".join([n.get('nodeValue', '') for n in iframe_nodes if n.get('nodeName') == '#text']).lower()
-                    if "success!" in iframe_text:
-                        logger_obj.info("Cloudflare bypass verified via IFRAME internal text.")
-                        time.sleep(0.5) # Stability pause
-                        return True
-                except:
-                    pass
-
-                is_passed = 'just a moment' not in html_now and \
-                            'verifying your connection' not in html_now and \
-                            ('challenges.cloudflare.com' not in html_now or "success!" in html_now)
-                
-                if is_passed:
-                    logger_obj.info("Cloudflare bypass verified via page HTML/Title.")
-                    time.sleep(0.5) # Stability pause
+        # 6. WAIT FOR SUCCESS
+        # Wait shorter and poll for success frequently (0.05s intervals)
+        for _ in range(50): 
+            time.sleep(0.05)
+            # Check iframe content directly via CDP for "Success!" (Highest Reliability)
+            try:
+                iframe_doc = page.run_cdp('DOM.getFlattenedDocument', depth=-1, pierce=True)
+                iframe_nodes = iframe_doc.get('nodes', [])
+                iframe_text = "".join([n.get('nodeValue', '') for n in iframe_nodes if n.get('nodeName') == '#text']).lower()
+                if "success!" in iframe_text:
+                    logger_obj.info("Cloudflare bypass verified via IFRAME internal text.")
                     return True
+            except:
+                pass
+            
+            # Check main page HTML/Title (Secondary)
+            html_now = page.html.lower()
+            if 'just a moment' not in html_now and \
+               'verifying your connection' not in html_now and \
+               ('challenges.cloudflare.com' not in html_now or "success!" in html_now):
+                logger_obj.info("Cloudflare bypass verified via page state.")
+                return True
+
+        msg = "All CDP click ratios failed to bypass Cloudflare."
+        logger_obj.warning(msg)
+        if sync_broadcast and node_id:
+            sync_broadcast(f"[Node {node_id}] {msg}")
+        return False
 
         msg = "All CDP click ratios failed to bypass Cloudflare."
         logger_obj.warning(msg)
@@ -631,21 +642,24 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
                 
         
         pass_inp = None
-        for _ in range(75): # 75 * 0.2s = 15s (Ultra Fast Polling!)
-            pass_inp = safe_ele(page, 'css:input[type="password"]', timeout=0.1)
+        for _ in range(150): # 15s (Faster Polling! 0.1s intervals)
+            pass_inp = safe_ele(page, 'css:input[type="password"]', timeout=0.05)
             if pass_inp:
                 break
             
-            # Proactive Cloudflare detection
-            title = safe_get(page, "title").lower()
-            if "just a moment" in title or "verifying your connection" in title:
+            # Check for Cloudflare Challenge
+            title = page.title.lower()
+            if "just a moment" in title or "verifying your connection" in title or "challenges.cloudflare.com" in page.html.lower():
                 sync_broadcast(f"[Node {node_id}] [{nama}] Cloudflare detected. Bypassing...")
-                solve_cloudflare_cdp(page, logger, sync_broadcast, node_id)
+                if solve_cloudflare_cdp(page, logger, sync_broadcast, node_id):
+                    # If solved, try finding the input immediately
+                    pass_inp = safe_ele(page, 'css:input[type="password"]', timeout=0.5)
+                    if pass_inp: break
                 continue
             
             # Fast Modal/Splash cleanup
             handle_oops_modal(page, logger, sync_broadcast, node_id)
-            time.sleep(0.2)
+            time.sleep(0.1)
 
         if not pass_inp:
             sync_broadcast(f"[Node {node_id}] [{nama}] Login form not found.")
@@ -660,7 +674,8 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
             if "success!" in html_login:
                 break
             if "challenges.cloudflare.com" in html_login:
-                solve_cloudflare_cdp(page, logger, sync_broadcast, node_id)
+                if solve_cloudflare_cdp(page, logger, sync_broadcast, node_id):
+                    break
             else:
                 break # No CF found, proceed
             time.sleep(0.1)
@@ -755,7 +770,8 @@ def submit_booking(page: ChromiumPage, profile_data: Dict[str, str], location_id
     try:
         # 1. State Recognition (Anti-Reload Guard)
         # Check if we already have the quota dropdown (Success state) OR the boutique dropdown (Ready state)
-        has_wakda = safe_ele(page, 'select#wakda', timeout=0.5)
+        # Increased timeout slightly for better stability in simulation/high-load
+        has_wakda = safe_ele(page, 'select#wakda', timeout=1.5)
         has_site = safe_ele(page, 'select#site', timeout=0.3) or safe_ele(page, '@@name=site', timeout=0.1)
         
         # If we see any of these, TRUST the page and skip navigation (Crucial for Simulation)
@@ -817,15 +833,16 @@ def submit_booking(page: ChromiumPage, profile_data: Dict[str, str], location_id
         # 1.5 CLOUDFLARE SYNC GUARD (QUOTA PAGE)
         # Wait for "Success!" before any interaction (Slot selection or button click)
         sync_broadcast(f"[Node {node_id}] [{profile_data.get('nama_lengkap')}] Syncing Cloudflare before slot selection...")
-        for _ in range(40): # 8s max wait (Aggressive Polling)
+        for _ in range(50): # 7.5s max wait (Aggressive Polling)
             html_now = safe_get(page, "html").lower()
             if "success!" in html_now:
                 break
             if "challenges.cloudflare.com" in html_now:
-                solve_cloudflare_cdp(page, logger, sync_broadcast, node_id)
+                if solve_cloudflare_cdp(page, logger, sync_broadcast, node_id):
+                    break
             else:
                 break
-            time.sleep(0.2)
+            time.sleep(0.15) # Faster polling
         
         # 2. Find best available slot
         select_wakda = page.ele('select#wakda')

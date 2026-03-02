@@ -128,14 +128,16 @@ async def run_simulation():
         
         # Now inject the CRITICAL Quota Dropdown (#wakda)
         page.run_js('''
-            var sel = document.querySelector('select#wakda');
-            if(!sel) {
-                sel = document.createElement('select');
-                sel.id = 'wakda';
-                sel.name = 'wakda';
-                sel.style = "position:fixed; top:40%; left:50%; transform:translate(-50%, -50%); width:400px; height:60px; z-index:20000; border:10px solid lime; background:white; font-size:24px; text-align:center; display:block; visibility:visible;";
-                document.body.appendChild(sel);
-            }
+            // Clear existing simulation elements to avoid conflicts
+            var old = document.getElementById('wakda');
+            if(old) old.remove();
+            
+            var sel = document.createElement('select');
+            sel.id = 'wakda';
+            sel.name = 'wakda';
+            sel.style = "position:fixed; top:40%; left:50%; transform:translate(-50%, -50%); width:400px; height:60px; z-index:20000; border:10px solid lime; background:white; font-size:24px; text-align:center; display:block; visibility:visible;";
+            document.body.appendChild(sel);
+            
             // Add realistic options (Mocking availability so the real API accepts it)
             sel.innerHTML = '<option value="">-- Pilih Jadwal --</option>' + 
                             '<option value="SIMULASI_123">08:00 - 09:00 (Tersedia 5/50)</option>';
@@ -155,7 +157,7 @@ async def run_simulation():
             sel.dispatchEvent(new Event('change', { bubbles: true }));
         ''')
         
-        time.sleep(2.0) # Let DOM settle
+        time.sleep(1.5) # Let DOM settle for better recognition
         start_time = time.time()
         # Keep it compatible with the real API signature
         res = submit_booking(page, config_payload, site_id)
