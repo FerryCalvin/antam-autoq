@@ -136,7 +136,7 @@ async def run_simulation():
                 sel.style = "position:fixed; top:40%; left:50%; transform:translate(-50%, -50%); width:400px; height:60px; z-index:20000; border:10px solid lime; background:white; font-size:24px; text-align:center; display:block; visibility:visible;";
                 document.body.appendChild(sel);
             }
-            // Add realistic options
+            // Add realistic options (Mocking availability so the real API accepts it)
             sel.innerHTML = '<option value="">-- Pilih Jadwal --</option>' + 
                             '<option value="SIMULASI_123">08:00 - 09:00 (Tersedia 5/50)</option>';
             sel.value = ""; 
@@ -146,10 +146,10 @@ async def run_simulation():
             if(!msg) {
                 msg = document.createElement('div');
                 msg.id = 'simulation-msg';
-                msg.style = "position:fixed; top:20%; left:50%; transform:translateX(-50%); z-index:10001; padding:20px; background:red; color:white; font-size:22px; font-weight:bold; border:4px solid white; box-shadow:0 0 30px rgba(255,0,0,0.8);";
+                msg.style = "position:fixed; top:20%; left:50%; transform:translateX(-50%); z-index:10001; padding:20px; background:blue; color:white; font-size:22px; font-weight:bold; border:4px solid white; box-shadow:0 0 30px rgba(0,0,255,0.8);";
                 document.body.appendChild(msg);
             }
-            msg.innerHTML = '⚡ MOCK QUOTA DETECTED! ⚡<br><small>Sniper is engaging...</small>';
+            msg.innerHTML = '⚡ MOCK QUOTA DETECTED! ⚡<br><small>Sniper is engaging (Simulated)...</small>';
             
             // Trigger change event to alert the bot if it was polling
             sel.dispatchEvent(new Event('change', { bubbles: true }));
@@ -157,6 +157,7 @@ async def run_simulation():
         
         time.sleep(2.0) # Let DOM settle
         start_time = time.time()
+        # Keep it compatible with the real API signature
         res = submit_booking(page, config_payload, site_id)
         
         end_time = time.time()

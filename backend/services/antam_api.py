@@ -745,7 +745,7 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
         sync_broadcast(f"[Node {node_id}] [{nama}] Login automation error: {e}")
         return False
 
-def submit_booking(page: ChromiumPage, profile_data: Dict[str, str], location_id: str) -> Dict[str, Any]:
+def submit_booking(page: ChromiumPage, profile_data: Dict[str, str], location_id: str, sync_broadcast=None, node_id=None) -> Dict[str, Any]:
     url = f"https://antrean.logammulia.com/antrean?site={location_id}"
     logger.info(f"[SNIPER] Starting sequence for {profile_data.get('nama_lengkap', 'Unknown')} at {location_id}")
     
