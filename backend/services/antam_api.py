@@ -770,30 +770,34 @@ def submit_booking(page: ChromiumPage, profile_data: Dict[str, str], location_id
     try:
         # 1. State Recognition (Anti-Reload Guard)
         # Check if we already have the quota dropdown (Success state) OR the boutique dropdown (Ready state)
-        # Increased timeout slightly for better stability in simulation/high-load
-        has_wakda = safe_ele(page, 'select#wakda', timeout=1.5)
+        # We use a longer timeout for wakda to catch injected elements in simulation
+        has_wakda = safe_ele(page, 'select#wakda', timeout=1.0)
         has_site = safe_ele(page, 'select#site', timeout=0.3) or safe_ele(page, '@@name=site', timeout=0.1)
         
-        # If we see any of these, TRUST the page and skip navigation (Crucial for Simulation)
-        if (has_wakda and has_wakda.states.is_displayed) or (has_site and has_site.states.is_displayed):
-             logger.info(f"[SNIPER] State recognized (wakda={bool(has_wakda)}, site={bool(has_site)}). Skipping initial navigation.")
+        page_url = safe_get(page, "url")
+        base_match = f"site={location_id}" in page_url
+        
+        # If we see the dropdowns, TRUST the page (Crucial for Simulation Persistence)
+        if has_wakda or has_site:
+             logger.info(f"[SNIPER] Dropdown recognized (#wakda={bool(has_wakda)}, #site={bool(has_site)}). Staying on current page.")
+        # If URL matches but dropdowns are missing, we might need a refresh or boutique selection
+        elif base_match:
+             logger.info("[SNIPER] URL matches but dropdowns missing. Proceeding to interaction.")
         else:
-            page_url = safe_get(page, "url")
             if "/users" in page_url:
-                 logger.info("[SNIPER] Currently on Profile page. Navigating to Menu Antrean...")
+                 logger.info("[SNIPER] On Profile page. Navigating via Menu Antrean...")
                  menu_btn = safe_ele(page, 'text:Menu Antrean', timeout=2) or safe_ele(page, '@@style*background-color: rgb(86, 44, 255)', timeout=0.5)
                  if menu_btn:
                      menu_btn.click()
                      page.wait.load_start(timeout=5)
                  else:
-                     logger.info(f"[SNIPER] Navigating directly to target URL: {url}")
                      page.get(url, retry=0, timeout=12)
             else:
-                logger.info(f"[SNIPER] Dropdown not found. Navigating to {url}...")
+                logger.info(f"[SNIPER] Navigating to target URL: {url}")
                 try:
                     page.get(url, retry=0, timeout=15)
                 except Exception as e:
-                    logger.warning(f"[SNIPER] Initial navigation warning: {e}")
+                    logger.warning(f"[SNIPER] Navigation warning: {e}")
                 
         # 2. Boutique selection bypass (if we landed on the selection page)
         try:
