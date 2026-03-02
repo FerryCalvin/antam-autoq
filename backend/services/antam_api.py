@@ -412,21 +412,21 @@ def solve_generic_math_captcha(page: ChromiumPage, logger_obj=logger, sync_broad
         wait_for_stable(page)
         time.sleep(0.05)
         # 1. Direct approach: Find the input and its parent label/text
-        math_input = safe_ele(page, 'css:input[placeholder*="Jawaban"]', timeout=1) or safe_ele(page, 'css:input[name*="captcha"]', timeout=1)
+        math_input = safe_ele(page, 'css:input[placeholder*="Jawaban"]', timeout=1) or \
+                     safe_ele(page, 'css:input[name*="captcha"]', timeout=1) or \
+                     safe_ele(page, 'css:input[type="number"]', timeout=1)
+        
         if not math_input:
             # Fallback to whole page search
-            html = safe_get(page, "html").lower()
+            html = page.html.lower()
             math_match = re.search(r'(\d+\s+(ditambah|dikurangi|dikali|dibagi)\s+\d+)', html)
             if not math_match: return False
             question = math_match.group(1)
         else:
-            # Get text from the parent or preceding element (usually "Hitunglah X + Y ?")
-            question_context = math_input.parent().text if math_input.parent() else ""
+            # Get text from the parent, sibling or whole page
+            # New format: "Berapa hasil perhitungan dari 6 ditambah 1 ?"
+            question_context = page.html # High coverage
             math_match = re.search(r'(\d+\s+(ditambah|dikurangi|dikali|dibagi)\s+\d+)', question_context)
-            if not math_match:
-                # Try siblings
-                question_context = page.html # Last resort
-                math_match = re.search(r'(\d+\s+(ditambah|dikurangi|dikali|dibagi)\s+\d+)', question_context)
             
             if not math_match: return False
             question = math_match.group(1)
@@ -454,6 +454,16 @@ def solve_generic_math_captcha(page: ChromiumPage, logger_obj=logger, sync_broad
                 }}
             }}
         ''')
+        
+        # 4. CLICK VERIFY / SUBMIT (Purple button)
+        verify_btn = safe_ele(page, 'text:Verify', timeout=1) or \
+                     safe_ele(page, '@@tag:button@@text():Verify', timeout=0.5) or \
+                     safe_ele(page, '@@class*=btn@@text():Verify', timeout=0.5)
+        if verify_btn:
+            logger_obj.info("Clicking Math Verify button...")
+            verify_btn.click()
+            page.wait.load_start(timeout=5)
+            
         return True
     except Exception as ex:
         logger_obj.warning(f"Math Captcha Error: {ex}")
@@ -478,11 +488,11 @@ def solve_cloudflare_cdp(page: ChromiumPage, logger_obj=logger, sync_broadcast=N
     """
     try:
         # --- SAFE ACCESS PAGE PROPERTIES ---
-        title = safe_get(page, "title").lower()
-        html = safe_get(page, "html").lower()
+        title = page.title.lower()
+        html = page.html.lower()
             
         is_active_cf = ("just a moment" in title or "verifying your connection" in title) or \
-                       ("challenges.cloudflare.com" in html and not ("wakda" in html or "/antrean" in safe_get(page, "url")))
+                       ("challenges.cloudflare.com" in html and not ("wakda" in html or "/antrean" in page.url))
         
         # Check if already solved (green checkmark)
         if "success!" in html and not is_active_cf:
@@ -558,18 +568,32 @@ def solve_cloudflare_cdp(page: ChromiumPage, logger_obj=logger, sync_broadcast=N
             page.run_cdp('Input.dispatchMouseEvent', type='mouseReleased', x=cx, y=cy, button='left', buttons=0, clickCount=1)
 
             # Wait shorter and poll for success frequently
-            for _ in range(20): # Wait up to 1s total (Poll every 0.05s)
+            for _ in range(25): # Wait up to 1.25s total (Poll every 0.05s)
                 time.sleep(0.05)
-                html_now = safe_get(page, "html").lower()
-                url_now = safe_get(page, "url").lower()
+                # Check main page
+                html_now = page.html.lower()
+                url_now = page.url.lower()
+                
+                # Check iframe content directly via CDP for "Success!"
+                # This is more reliable than main page HTML
+                try:
+                    iframe_doc = page.run_cdp('DOM.getFlattenedDocument', depth=-1, pierce=True)
+                    iframe_nodes = iframe_doc.get('nodes', [])
+                    iframe_text = "".join([n.get('nodeValue', '') for n in iframe_nodes if n.get('nodeName') == '#text']).lower()
+                    if "success!" in iframe_text:
+                        logger_obj.info("Cloudflare bypass verified via IFRAME internal text.")
+                        time.sleep(0.5) # Stability pause
+                        return True
+                except:
+                    pass
+
                 is_passed = 'just a moment' not in html_now and \
-                            ('email' in html_now or 'password' in html_now or 'wakda' in html_now or '/antrean' in url_now or '/users' in url_now)
+                            'verifying your connection' not in html_now and \
+                            ('challenges.cloudflare.com' not in html_now or "success!" in html_now)
                 
                 if is_passed:
-                    msg = f"Cloudflare SUCCESSFULLY bypassed via CDP!"
-                    logger_obj.info(msg)
-                    if sync_broadcast and node_id:
-                        sync_broadcast(f"[Node {node_id}] {msg}")
+                    logger_obj.info("Cloudflare bypass verified via page HTML/Title.")
+                    time.sleep(0.5) # Stability pause
                     return True
 
         msg = "All CDP click ratios failed to bypass Cloudflare."
