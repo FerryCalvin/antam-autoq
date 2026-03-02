@@ -216,8 +216,10 @@ def check_quota(page: ChromiumPage, location_id: str, sync_broadcast=None, node_
     
     try:
     # Stricter CF Detection: Don't just look at HTML (Rocket Loader false positive), look at Title OR visible challenge iframe
-        is_cf = ("just a moment" in title_lower or "verifying your connection" in title_lower) or \
-                (safe_ele(page, 'css:iframe[src*="challenges.cloudflare.com"]', timeout=0.1) and "challenges.cloudflare.com" in html_lower)
+    # ADAPTIVE: If select#wakda is present, we are NOT blocked by a full-page challenge (inline instead)
+    has_wakda = "select#wakda" in html_lower
+    is_cf = ("just a moment" in title_lower or "verifying your connection" in title_lower) or \
+            (not has_wakda and safe_ele(page, 'css:iframe[src*="challenges.cloudflare.com"]', timeout=0.1) and "challenges.cloudflare.com" in html_lower)
         
         is_login = "/masuk" in page_url or "/login" in page_url or "/home" in page_url
         is_boutique = ("select" in html_lower and "tampilkan butik" in html_lower) or \
@@ -788,6 +790,19 @@ def submit_booking(page: ChromiumPage, profile_data: Dict[str, str], location_id
              logger.error(f"[SNIPER] Failed: select#wakda never loaded at {page_url}")
              return {"success": False, "error": f"Select dropdown never loaded at {page_url}"}
         
+        # 1.5 CLOUDFLARE SYNC GUARD (QUOTA PAGE)
+        # Wait for "Success!" before any interaction (Slot selection or button click)
+        sync_broadcast(f"[Node {node_id}] [{profile_data.get('nama_lengkap')}] Syncing Cloudflare before slot selection...")
+        for _ in range(40): # 8s max wait (Aggressive Polling)
+            html_now = safe_get(page, "html").lower()
+            if "success!" in html_now:
+                break
+            if "challenges.cloudflare.com" in html_now:
+                solve_cloudflare_cdp(page, logger, sync_broadcast, node_id)
+            else:
+                break
+            time.sleep(0.2)
+        
         # 2. Find best available slot
         select_wakda = page.ele('select#wakda')
         options = select_wakda.eles('tag:option')
@@ -806,6 +821,19 @@ def submit_booking(page: ChromiumPage, profile_data: Dict[str, str], location_id
             return {"success": False, "error": "No available slot found during sniper execution."}
             
         logger.info(f"[SNIPER] Selected slot value: {target_wakda_value}")
+
+        # 2.5 SELECT THE SLOT (JS Injection for reliability)
+        page.run_js(f'''
+            var sel = document.querySelector('select#wakda');
+            if (sel) {{
+                var nativeSetter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set;
+                nativeSetter.call(sel, '{target_wakda_value}');
+                sel.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                sel.dispatchEvent(new Event('change', {{ bubbles: true }}));
+            }}
+        ''')
+        time.sleep(0.3) # Small delay for UI update
+        wait_for_stable(page)
         
         # 3. Fill the inputs (INSTANT INJECTION MODE)
         logger.info("[SNIPER] Filling form instantly...")
@@ -836,7 +864,11 @@ def submit_booking(page: ChromiumPage, profile_data: Dict[str, str], location_id
         logger.info("[SNIPER] Submitting form ...")
         
         # Click submit natively to trigger JS event listeners (trusted event)
-        final_btn = safe_ele(page, 'text:Lanjut', timeout=1) or safe_ele(page, 'text:Submit', timeout=1) or safe_ele(page, 'css:button[type="submit"]')
+        # Added "Ambil Antrean" as requested by user
+        final_btn = safe_ele(page, 'text:Ambil Antrean', timeout=1) or \
+                    safe_ele(page, 'text:Lanjut', timeout=1) or \
+                    safe_ele(page, 'text:Submit', timeout=1) or \
+                    safe_ele(page, 'css:button[type="submit"]')
         if final_btn:
             final_btn.click() # Native trusted
         else:
