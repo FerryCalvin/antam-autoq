@@ -215,11 +215,11 @@ def check_quota(page: ChromiumPage, location_id: str, sync_broadcast=None, node_
     page_url = safe_get(page, "url")
     
     try:
-    # Stricter CF Detection: Don't just look at HTML (Rocket Loader false positive), look at Title OR visible challenge iframe
-    # ADAPTIVE: If select#wakda is present, we are NOT blocked by a full-page challenge (inline instead)
-    has_wakda = "select#wakda" in html_lower
-    is_cf = ("just a moment" in title_lower or "verifying your connection" in title_lower) or \
-            (not has_wakda and safe_ele(page, 'css:iframe[src*="challenges.cloudflare.com"]', timeout=0.1) and "challenges.cloudflare.com" in html_lower)
+        # Stricter CF Detection: Don't just look at HTML (Rocket Loader false positive), look at Title OR visible challenge iframe
+        # ADAPTIVE: If select#wakda is present, we are NOT blocked by a full-page challenge (inline instead)
+        has_wakda = "select#wakda" in html_lower
+        is_cf = ("just a moment" in title_lower or "verifying your connection" in title_lower) or \
+                (not has_wakda and safe_ele(page, 'css:iframe[src*="challenges.cloudflare.com"]', timeout=0.1) and "challenges.cloudflare.com" in html_lower)
         
         is_login = "/masuk" in page_url or "/login" in page_url or "/home" in page_url
         is_boutique = ("select" in html_lower and "tampilkan butik" in html_lower) or \
