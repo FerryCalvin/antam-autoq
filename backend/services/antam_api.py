@@ -236,7 +236,19 @@ def check_quota(page: ChromiumPage, location_id: str, sync_broadcast=None, node_
         
         # PROACTIVE ERROR HANDLING
         if handle_oops_modal(page, logger, sync_broadcast, node_id):
-            return 0 # Immediate retry if modal cleared
+            # Don't return 0! Continue detection so login/boutique/quota state is properly identified.
+            # Re-read page state after modal dismissal
+            title_lower = safe_get(page, "title").lower()
+            html_lower = safe_get(page, "html").lower()
+            page_url = safe_get(page, "url")
+            is_login = "/masuk" in page_url or "/login" in page_url or "/home" in page_url
+            is_quota_page = "select#wakda" in html_lower
+            if is_login:
+                return -1  # Proper login redirect
+            elif is_quota_page:
+                pass  # Continue to quota extraction
+            else:
+                return 0  # Unknown state, retry
             
         # --- DYNAMIC STATUS REPORTING & EARLY CF EXIT ---
         if is_cf_blocking:
@@ -1062,11 +1074,19 @@ def run_drission_bot_loop(node_id: int, config: Dict[str, Any], sync_broadcast, 
                 else:
                     # quota == 0 (Quota full or unknown)
                     title_final = safe_get(page, "title").lower()
-                    if "just a moment" in title_final or "verifying your connection" in title_final or \
-                       safe_ele(page, 'css:iframe[src*="challenges.cloudflare.com"]', timeout=0.1):
+                    is_hard_cf = "just a moment" in title_final or "verifying your connection" in title_final
+                    
+                    # Only trigger Last-Resort bypass if CF is truly blocking (NOT already Success!)
+                    if is_hard_cf or (safe_ele(page, 'css:iframe[src*="challenges.cloudflare.com"]', timeout=0.1) and not is_cf_passed(page)):
                         sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] Cloudflare detected (Last-Resort). Bypassing...")
                         solve_cloudflare_cdp(page, logger, sync_broadcast, node_id)
-                        time.sleep(2)
+                        time.sleep(1)
+                        continue
+
+                    # Check if we're actually on login page (misidentified as quota=0)
+                    page_url_now = safe_get(page, "url")
+                    if "/login" in page_url_now or "/masuk" in page_url_now or "/home" in page_url_now:
+                        auto_login(page, config['email'], config['password'], sync_broadcast, node_id, nama_lengkap)
                         continue
 
                     sync_broadcast(f"[Node {node_id}] [{nama_lengkap}] Quota full. Retrying in 10s...")
