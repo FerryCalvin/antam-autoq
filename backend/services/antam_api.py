@@ -500,54 +500,39 @@ def solve_generic_math_captcha(page: ChromiumPage, logger_obj=logger, sync_broad
 
 def is_cf_passed(page: ChromiumPage) -> bool:
     """
-    Robust check to see if Cloudflare Turnstile has already been solved.
-    Checks main page HTML and inside Turnstile iframe via CDP for "Success!".
+    FAST check to see if Cloudflare Turnstile has already been solved.
+    Optimized to avoid expensive CDP calls whenever possible.
     """
     try:
+        # 1. FASTEST: Check main page HTML for "Success!" (< 1ms)
         html = page.html.lower()
-        # 1. Main page check (Fastest) - Includes common success markers
-        # NOTE: Don't use broad terms like "verified" — they match random page text
-        success_markers = ["success!"]
-        if any(m in html for m in success_markers):
+        if "success!" in html:
             return True
         
-        # 2. Check if we are still on a hard blocking page (Title check)
+        # 2. FAST: Title check — if blocking page, definitely not passed
         title = page.title.lower()
         if "just a moment" in title or "verifying your connection" in title:
             return False
-            
-        # 3. Iframe check (Most reliable for Turnstile)
-        # Using pierce=True to see inside iframes via CDP
-        doc = page.run_cdp('DOM.getFlattenedDocument', depth=-1, pierce=True)
-        nodes = doc.get('nodes', [])
         
-        has_cf_system = False
-        for node in nodes:
-            # Check for success indicators in text nodes
-            if node.get('nodeName') == '#text':
-                val = node.get('nodeValue', '').lower()
-                if any(m in val for m in success_markers):
-                    return True
-            
-            # Check for iframe presence
-            if node.get('nodeName') == 'IFRAME':
-                attrs = node.get('attributes', [])
-                for i in range(0, len(attrs), 2):
-                    if attrs[i] == 'src' and 'challenges.cloudflare.com' in attrs[i+1]:
-                        has_cf_system = True
-                
-                # If iframe is present but has success-like attributes or hidden state
-                # Turnstile sometimes hides the checkbox on success
-                style = "".join([attrs[j+1] for j in range(0, len(attrs), 2) if attrs[j] == 'style']).lower()
-                if "display: none" in style or "visibility: hidden" in style:
-                    return True
-        
-        # 4. If no CF iframe found in DOM and not on blocking page, we likely passed
-        if not has_cf_system and "challenges.cloudflare.com" not in html:
+        # 3. FAST: No CF reference at all? Then we're clear
+        if "challenges.cloudflare.com" not in html:
             return True
+        
+        # 4. CF reference exists but no "success!" in main HTML.
+        #    Now we MUST check inside the iframe via CDP (slower but necessary).
+        try:
+            doc = page.run_cdp('DOM.getFlattenedDocument', depth=-1, pierce=True)
+            for node in doc.get('nodes', []):
+                if node.get('nodeName') == '#text':
+                    if "success!" in node.get('nodeValue', '').lower():
+                        return True
+        except:
+            pass
             
     except:
         pass
+    return False
+
     return False
 
 def solve_cloudflare_cdp(page: ChromiumPage, logger_obj, sync_broadcast=None, node_id=None) -> bool:
@@ -688,20 +673,22 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
         # MUST wait for Turnstile "Success!" before injecting credentials.
         # Without this, server rejects because CF token isn't ready.
         cf_verified = False
-        for attempt in range(100): # 10s max wait (100 * 0.1s)
+        cdp_attempted = False
+        for attempt in range(200): # 10s max wait (200 * 0.05s) — 20Hz polling!
             if is_cf_passed(page):
                 cf_verified = True
                 break
             
-            # Actively try to solve if Turnstile iframe is present
-            html_login = safe_get(page, "html").lower()
-            if "challenges.cloudflare.com" in html_login:
-                if attempt == 0:
+            # Try CDP bypass ONCE if Turnstile iframe is present
+            if not cdp_attempted:
+                html_login = safe_get(page, "html").lower()
+                if "challenges.cloudflare.com" in html_login:
                     sync_broadcast(f"[Node {node_id}] [{nama}] Waiting for Cloudflare verification before login...")
-                solve_cloudflare_cdp(page, logger, sync_broadcast, node_id)
-                # Don't break here! Re-check is_cf_passed on next iteration
+                    solve_cloudflare_cdp(page, logger, sync_broadcast, node_id)
+                    cdp_attempted = True
+                    continue  # Re-check immediately after CDP
             
-            time.sleep(0.1)
+            time.sleep(0.05)
         
         if cf_verified:
             sync_broadcast(f"[Node {node_id}] [{nama}] Cloudflare verified. Proceeding with login...")
