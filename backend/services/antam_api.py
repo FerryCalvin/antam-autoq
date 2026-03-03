@@ -236,9 +236,13 @@ def check_quota(page: ChromiumPage, location_id: str, sync_broadcast=None, node_
             
         # --- DYNAMIC STATUS REPORTING & EARLY CF EXIT ---
         if is_cf:
-            if sync_broadcast and node_id:
-                sync_broadcast(f"[Node {node_id}] [{nama or 'Bot'}] Cloudflare active. Waiting for bypass...")
-            return -2
+            # Re-check with the robust passed-helper to avoid infinite loop on success iframes
+            if is_cf_passed(page):
+                logger.debug("[check_quota] Cloudflare iframe present but 'Success!' detected. Proceeding...")
+            else:
+                if sync_broadcast and node_id:
+                    sync_broadcast(f"[Node {node_id}] [{nama or 'Bot'}] Cloudflare active. Waiting for bypass...")
+                return -2
 
         if sync_broadcast and node_id:
             if is_announcement:
@@ -476,7 +480,50 @@ def solve_generic_math_captcha(page: ChromiumPage, logger_obj=logger, sync_broad
 # NO PyAutoGUI needed, NO physical mouse, WORKS with multiple bots!
 # ============================================================================
 
-def solve_cloudflare_cdp(page: ChromiumPage, logger_obj=logger, sync_broadcast=None, node_id=None) -> bool:
+def is_cf_passed(page: ChromiumPage) -> bool:
+    """
+    Robust check to see if Cloudflare Turnstile has already been solved.
+    Checks main page HTML and inside Turnstile iframe via CDP for "Success!".
+    """
+    try:
+        html = page.html.lower()
+        # 1. Main page check (Fastest)
+        if "success!" in html:
+            return True
+        
+        # 2. Check if we are still on a hard blocking page
+        title = page.title.lower()
+        if "just a moment" in title or "verifying your connection" in title:
+            return False
+            
+        # 3. Iframe check (Most reliable for Turnstile)
+        # Using pierce=True to see inside iframes via CDP
+        doc = page.run_cdp('DOM.getFlattenedDocument', depth=-1, pierce=True)
+        nodes = doc.get('nodes', [])
+        
+        has_cf_system = False
+        for node in nodes:
+            # Check for "Success!" text
+            if node.get('nodeName') == '#text':
+                val = node.get('nodeValue', '').lower()
+                if "success!" in val:
+                    return True
+            # Check for iframe presence
+            if node.get('nodeName') == 'IFRAME':
+                attrs = node.get('attributes', [])
+                for i in range(0, len(attrs), 2):
+                    if attrs[i] == 'src' and 'challenges.cloudflare.com' in attrs[i+1]:
+                        has_cf_system = True
+        
+        # 4. If no CF iframe/system found in DOM and not on blocking page, we likely passed
+        if not has_cf_system and "challenges.cloudflare.com" not in html:
+            return True
+            
+    except:
+        pass
+    return False
+
+def solve_cloudflare_cdp(page: ChromiumPage, logger_obj, sync_broadcast=None, node_id=None) -> bool:
     """
     Bypass Cloudflare Turnstile using CDP Input.dispatchMouseEvent.
     
@@ -668,9 +715,10 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
         # --- CLOUDFLARE SYNC GUARD ---
         # Don't inject if Cloudflare is still visible but NOT yet solved
         for _ in range(50): # 5s wait max for Turnstile to auto-pass or be clicked
-            html_login = safe_get(page, "html").lower()
-            if "success!" in html_login:
+            if is_cf_passed(page):
                 break
+            
+            html_login = safe_get(page, "html").lower()
             if "challenges.cloudflare.com" in html_login:
                 if solve_cloudflare_cdp(page, logger, sync_broadcast, node_id):
                     break
@@ -836,9 +884,10 @@ def submit_booking(page: ChromiumPage, profile_data: Dict[str, str], location_id
         # Wait for "Success!" before any interaction (Slot selection or button click)
         sync_broadcast(f"[Node {node_id}] [{profile_data.get('nama_lengkap')}] Syncing Cloudflare before slot selection...")
         for _ in range(50): # 7.5s max wait (Aggressive Polling)
-            html_now = safe_get(page, "html").lower()
-            if "success!" in html_now:
+            if is_cf_passed(page):
                 break
+                
+            html_now = safe_get(page, "html").lower()
             if "challenges.cloudflare.com" in html_now:
                 if solve_cloudflare_cdp(page, logger, sync_broadcast, node_id):
                     break
