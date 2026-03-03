@@ -506,7 +506,8 @@ def is_cf_passed(page: ChromiumPage) -> bool:
     try:
         html = page.html.lower()
         # 1. Main page check (Fastest) - Includes common success markers
-        success_markers = ["success!", "verification success", "verified", "identity verified"]
+        # NOTE: Don't use broad terms like "verified" — they match random page text
+        success_markers = ["success!"]
         if any(m in html for m in success_markers):
             return True
         
@@ -683,19 +684,30 @@ def auto_login(page: ChromiumPage, email: str, password: str, sync_broadcast, no
         
         email_inp = safe_ele(page, '@name=email', timeout=0.1) or safe_ele(page, 'css:input[type="email"]', timeout=0.1)
         
-        # --- CLOUDFLARE SYNC GUARD ---
-        # Don't inject if Cloudflare is still visible but NOT yet solved
-        for _ in range(50): # 5s wait max for Turnstile to auto-pass or be clicked
+        # --- CLOUDFLARE SYNC GUARD (MANDATORY BEFORE SUBMIT) ---
+        # MUST wait for Turnstile "Success!" before injecting credentials.
+        # Without this, server rejects because CF token isn't ready.
+        cf_verified = False
+        for attempt in range(100): # 10s max wait (100 * 0.1s)
             if is_cf_passed(page):
+                cf_verified = True
                 break
             
+            # Actively try to solve if Turnstile iframe is present
             html_login = safe_get(page, "html").lower()
             if "challenges.cloudflare.com" in html_login:
-                if solve_cloudflare_cdp(page, logger, sync_broadcast, node_id):
-                    break
-            else:
-                break # No CF found, proceed
+                if attempt == 0:
+                    sync_broadcast(f"[Node {node_id}] [{nama}] Waiting for Cloudflare verification before login...")
+                solve_cloudflare_cdp(page, logger, sync_broadcast, node_id)
+                # Don't break here! Re-check is_cf_passed on next iteration
+            
             time.sleep(0.1)
+        
+        if cf_verified:
+            sync_broadcast(f"[Node {node_id}] [{nama}] Cloudflare verified. Proceeding with login...")
+        else:
+            # Even if not verified after 10s, try anyway (might work without visible CF)
+            sync_broadcast(f"[Node {node_id}] [{nama}] CF verification timeout. Attempting login anyway...")
 
         sync_broadcast(f"[Node {node_id}] [{nama}] Injecting credentials instantly...")
         
