@@ -159,14 +159,15 @@ def safe_run_js(page, script, retries=5):
     return None
 
 def handle_oops_modal(page, logger_obj=logger, sync_broadcast=None, node_id=None):
-    """Detects and closes the 'Oops' error modal if reCAPTCHA or other errors occur."""
+    """Detects and closes the 'Oops' error modal if reCAPTCHA or other errors occur.
+    Returns True if modal was found and dismissed. Does NOT refresh the page."""
     try:
         # Looking for the "Oops" modal (SweetAlert2 title or general text)
         oops_modal = safe_ele(page, 'css:.swal2-title', timeout=0.1) or safe_ele(page, 'text:Oops', timeout=0.1)
         
         if oops_modal:
             html_text = safe_get(page, "html").lower()
-            if "recaptcha" in html_text or "captcha" in html_text:
+            if "recaptcha" in html_text or "captcha" in html_text or "oops" in html_text:
                 msg = "Oops modal detected (CAPTCHA Problem). Dismissing..."
                 logger_obj.warning(msg)
                 if sync_broadcast and node_id: sync_broadcast(f"[Node {node_id}] {msg}")
@@ -183,9 +184,9 @@ def handle_oops_modal(page, logger_obj=logger, sync_broadcast=None, node_id=None
                 # JS Fallback: Force close SweetAlert2 if it exists
                 page.run_js('if(typeof Swal !== "undefined") Swal.close();')
                 
-                # Refresh to start clean after a captcha failure
-                time.sleep(1)
-                page.refresh()
+                # Do NOT refresh here — let the caller decide what to do next.
+                # This preserves login state and prevents unnecessary reloads.
+                time.sleep(0.5)
                 return True
     except:
         pass
@@ -219,7 +220,9 @@ def check_quota(page: ChromiumPage, location_id: str, sync_broadcast=None, node_
         is_boutique = ("select" in html_lower and "tampilkan butik" in html_lower) or \
                       ("antrean belm" in html_lower and "pilih belm" in html_lower)
         is_quota_page = "select#wakda" in html_lower
-        is_announcement = safe_ele(page, 'text:Pengumuman', timeout=0.5) or safe_ele(page, 'css:.modal-content', timeout=0.5)
+        # Strict announcement detection: Only match VISIBLE elements with specific text
+        # Don't use broad .modal-content — it matches any Bootstrap modal including login forms
+        is_announcement = safe_ele(page, 'text:Pengumuman', timeout=0.3)
         
         # --- CF DETECTION EXCEPTION FOR FUNCTIONAL PAGES ---
         is_functional_page = is_login or is_boutique or is_quota_page or is_announcement
@@ -246,14 +249,16 @@ def check_quota(page: ChromiumPage, location_id: str, sync_broadcast=None, node_
                 return -2
 
         if sync_broadcast and node_id:
-            if is_announcement:
-                sync_broadcast(f"[Node {node_id}] [{nama or 'Bot'}] Announcement Pop-up detected.")
-            elif is_login:
+            # Priority order: Login > Boutique > Quota > Announcement
+            # This prevents misleading logs when login form is visible
+            if is_login:
                 sync_broadcast(f"[Node {node_id}] [{nama or 'Bot'}] On Login/Home page.")
             elif is_boutique:
                 sync_broadcast(f"[Node {node_id}] [{nama or 'Bot'}] On Boutique Selection page.")
             elif is_quota_page:
                 sync_broadcast(f"[Node {node_id}] [{nama or 'Bot'}] On Quota Selection page.")
+            elif is_announcement:
+                sync_broadcast(f"[Node {node_id}] [{nama or 'Bot'}] Announcement Pop-up detected.")
 
         # --- SMART NAVIGATION ---
         # ONLY navigate if we are totally lost (not on any of the above pages)
