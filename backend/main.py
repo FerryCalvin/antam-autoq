@@ -48,12 +48,7 @@ bot_manager = BotManager(ws_manager)
 # Disable CORS restrictions
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ],
+    allow_origin_regex=r"https?://.*", # Allow any origin while maintaining credentials=True compatibility
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -99,7 +94,7 @@ async def get_nodes(db: AsyncSession = Depends(get_db)):
 
 @app.post("/api/nodes", response_model=AccountNodeResponse)
 async def create_node(node: AccountNodeCreate, db: AsyncSession = Depends(get_db)):
-    db_node = AccountNode(**node.dict())
+    db_node = AccountNode(**node.model_dump())
     db.add(db_node)
     await db.commit()
     await db.refresh(db_node)
@@ -115,7 +110,7 @@ async def update_node(node_id: int, node_update: AccountNodeUpdate, db: AsyncSes
     if not db_node:
         raise HTTPException(status_code=404, detail="Node not found")
     
-    update_data = node_update.dict(exclude_unset=True)
+    update_data = node_update.model_dump(exclude_unset=True)
     for key, value in update_data.items():
         setattr(db_node, key, value)
     
