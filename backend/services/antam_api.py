@@ -215,17 +215,18 @@ def check_quota(page: ChromiumPage, location_id: str, sync_broadcast=None, node_
     page_url = safe_get(page, "url")
     
     try:
-        # Stricter CF Detection: Don't just look at HTML (Rocket Loader false positive), look at Title OR visible challenge iframe
-        # ADAPTIVE: If select#wakda is present, we are NOT blocked by a full-page challenge (inline instead)
-        has_wakda = "select#wakda" in html_lower
-        is_cf = ("just a moment" in title_lower or "verifying your connection" in title_lower) or \
-                (not has_wakda and safe_ele(page, 'css:iframe[src*="challenges.cloudflare.com"]', timeout=0.1) and "challenges.cloudflare.com" in html_lower)
-        
         is_login = "/masuk" in page_url or "/login" in page_url or "/home" in page_url
         is_boutique = ("select" in html_lower and "tampilkan butik" in html_lower) or \
                       ("antrean belm" in html_lower and "pilih belm" in html_lower)
         is_quota_page = "select#wakda" in html_lower
         is_announcement = safe_ele(page, 'text:Pengumuman', timeout=0.5) or safe_ele(page, 'css:.modal-content', timeout=0.5)
+        
+        # --- CF DETECTION EXCEPTION FOR FUNCTIONAL PAGES ---
+        is_functional_page = is_login or is_boutique or is_quota_page or is_announcement
+        
+        # Stricter Blocking CF Detection: Only trigger -2 if NOT on a functional page
+        is_cf_blocking = ("just a moment" in title_lower or "verifying your connection" in title_lower) or \
+                         (not is_functional_page and safe_ele(page, 'css:iframe[src*="challenges.cloudflare.com"]', timeout=0.1))
         
         # ACTIVE PAGE GUARD: If we are on login or boutique selection, we are NOT in night mode.
         is_active_page = is_login or is_boutique or is_quota_page
@@ -235,10 +236,10 @@ def check_quota(page: ChromiumPage, location_id: str, sync_broadcast=None, node_
             return 0 # Immediate retry if modal cleared
             
         # --- DYNAMIC STATUS REPORTING & EARLY CF EXIT ---
-        if is_cf:
+        if is_cf_blocking:
             # Re-check with the robust passed-helper to avoid infinite loop on success iframes
             if is_cf_passed(page):
-                logger.debug("[check_quota] Cloudflare iframe present but 'Success!' detected. Proceeding...")
+                logger.debug("[check_quota] Cloudflare blocking title present but 'Success!' detected. Proceeding...")
             else:
                 if sync_broadcast and node_id:
                     sync_broadcast(f"[Node {node_id}] [{nama or 'Bot'}] Cloudflare active. Waiting for bypass...")
@@ -257,7 +258,7 @@ def check_quota(page: ChromiumPage, location_id: str, sync_broadcast=None, node_
         # --- SMART NAVIGATION ---
         # ONLY navigate if we are totally lost (not on any of the above pages)
         # We also check if we are on a login or boutique page - if so, we DON'T reload.
-        if not (is_cf or is_login or is_boutique or is_quota_page):
+        if not (is_cf_blocking or is_login or is_boutique or is_quota_page):
             logger.info(f"Navigating to {url} to check slots...")
             try:
                 page.get(url, retry=0, timeout=12)
@@ -487,11 +488,12 @@ def is_cf_passed(page: ChromiumPage) -> bool:
     """
     try:
         html = page.html.lower()
-        # 1. Main page check (Fastest)
-        if "success!" in html:
+        # 1. Main page check (Fastest) - Includes common success markers
+        success_markers = ["success!", "verification success", "verified", "identity verified"]
+        if any(m in html for m in success_markers):
             return True
         
-        # 2. Check if we are still on a hard blocking page
+        # 2. Check if we are still on a hard blocking page (Title check)
         title = page.title.lower()
         if "just a moment" in title or "verifying your connection" in title:
             return False
@@ -503,19 +505,26 @@ def is_cf_passed(page: ChromiumPage) -> bool:
         
         has_cf_system = False
         for node in nodes:
-            # Check for "Success!" text
+            # Check for success indicators in text nodes
             if node.get('nodeName') == '#text':
                 val = node.get('nodeValue', '').lower()
-                if "success!" in val:
+                if any(m in val for m in success_markers):
                     return True
+            
             # Check for iframe presence
             if node.get('nodeName') == 'IFRAME':
                 attrs = node.get('attributes', [])
                 for i in range(0, len(attrs), 2):
                     if attrs[i] == 'src' and 'challenges.cloudflare.com' in attrs[i+1]:
                         has_cf_system = True
+                
+                # If iframe is present but has success-like attributes or hidden state
+                # Turnstile sometimes hides the checkbox on success
+                style = "".join([attrs[j+1] for j in range(0, len(attrs), 2) if attrs[j] == 'style']).lower()
+                if "display: none" in style or "visibility: hidden" in style:
+                    return True
         
-        # 4. If no CF iframe/system found in DOM and not on blocking page, we likely passed
+        # 4. If no CF iframe found in DOM and not on blocking page, we likely passed
         if not has_cf_system and "challenges.cloudflare.com" not in html:
             return True
             
