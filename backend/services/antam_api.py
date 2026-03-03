@@ -548,130 +548,75 @@ def solve_cloudflare_cdp(page: ChromiumPage, logger_obj, sync_broadcast=None, no
     4. Fire Input.dispatchMouseEvent (generates isTrusted:true click).
     """
     try:
-        # --- SAFE ACCESS PAGE PROPERTIES ---
-        title = page.title.lower()
-        html = page.html.lower()
-            
-        is_active_cf = ("just a moment" in title or "verifying your connection" in title) or \
-                       ("challenges.cloudflare.com" in html and not ("wakda" in html or "/antrean" in page.url))
-        
-        # Check if already solved (green checkmark)
-        if ("success!" in html or "success!" in title) and not is_active_cf:
-             logger_obj.info("Cloudflare already verified ('Success!' detected).")
-             return True
-             
-        # Check iframe internal state again for safety
-        try:
-            iframe_doc = page.run_cdp('DOM.getFlattenedDocument', depth=-1, pierce=True)
-            iframe_nodes = iframe_doc.get('nodes', [])
-            iframe_text = "".join([n.get('nodeValue', '') for n in iframe_nodes if n.get('nodeName') == '#text']).lower()
-            if "success!" in iframe_text:
-                logger_obj.info("Cloudflare already verified via IFRAME internal text.")
-                return True
-        except:
-            pass
-
-        if not is_active_cf:
-            logger_obj.info("Cloudflare challenge not active (Title check passed). Skipping CDP.")
+        # --- INSTANT PRE-CHECK: Already solved? ---
+        if is_cf_passed(page):
+            logger_obj.info("Cloudflare already verified (is_cf_passed). Skipping CDP.")
             return True
 
-        msg = "Searching for Cloudflare Turnstile iframe via CDP..."
+        # Check if CF challenge is even active
+        title = page.title.lower()
+        html = page.html.lower()
+        is_active_cf = ("just a moment" in title or "verifying your connection" in title) or \
+                       ("challenges.cloudflare.com" in html and not ("wakda" in html or "/antrean" in page.url))
 
-        # Step 1: Enable DOM and find the Turnstile iframe (with retry)
+        if not is_active_cf:
+            logger_obj.info("Cloudflare not active. Skipping CDP.")
+            return True
+
+        # Step 1: Find Turnstile iframe (TURBO: 50 * 0.05s = 2.5s max)
         page.run_cdp('DOM.enable')
         
         iframe_node = None
-        for attempt in range(100): # 100 * 0.1s = 10s (Ultra Fast Polling!)
+        for _ in range(50):
             result = page.run_cdp('DOM.getFlattenedDocument', depth=-1, pierce=True)
-            nodes = result.get('nodes', [])
-
-            for node in nodes:
+            for node in result.get('nodes', []):
                 if node.get('nodeName') == 'IFRAME':
                     attrs = node.get('attributes', [])
                     for i in range(0, len(attrs), 2):
                         if attrs[i] == 'src' and 'challenges.cloudflare.com' in attrs[i + 1]:
                             iframe_node = node
                             break
-                    if iframe_node:
-                        break
-            
+                if iframe_node:
+                    break
             if iframe_node:
                 break
-            time.sleep(0.1)
+            time.sleep(0.05)
 
         if not iframe_node:
-            msg = "Cloudflare Turnstile iframe not found in DOM."
-            logger_obj.warning(msg)
+            logger_obj.warning("Turnstile iframe not found.")
             if sync_broadcast and node_id:
-                sync_broadcast(f"[Node {node_id}] {msg}")
+                sync_broadcast(f"[Node {node_id}] Turnstile iframe not found.")
             return False
 
-        logger_obj.info(f"Turnstile iframe found (nodeId={iframe_node['nodeId']})")
-
-        # Step 2: Get iframe box model coordinates
+        # Step 2: Get iframe coordinates
         box = page.run_cdp('DOM.getBoxModel', nodeId=iframe_node['nodeId'])
         content = box['model']['content']
         x_start, y_start = content[0], content[1]
-        x_end, y_end = content[4], content[5]
-        iframe_w = x_end - x_start
-        iframe_h = y_end - y_start
+        iframe_w = content[4] - x_start
+        iframe_h = content[5] - y_start
 
-        logger_obj.info(f"Iframe at ({x_start},{y_start}) size {iframe_w}x{iframe_h}")
-
-        # Step 3: Try multiple checkbox position ratios
-        ratios = [
-            (0.12, 0.52),  # Primary
-            (0.15, 0.50),  # Slightly right
-            (0.10, 0.50),  # Slightly left
-        ]
-
-        for idx, (x_r, y_r) in enumerate(ratios):
+        # Step 3: Fire ALL clicks instantly (no delay between ratios)
+        ratios = [(0.12, 0.52), (0.15, 0.50), (0.10, 0.50)]
+        for x_r, y_r in ratios:
             cx = x_start + (iframe_w * x_r)
             cy = y_start + (iframe_h * y_r)
-
-            msg = f"CDP Click #{idx+1}: ({cx:.0f},{cy:.0f})"
-            logger_obj.info(msg)
-            if sync_broadcast and node_id:
-                sync_broadcast(f"[Node {node_id}] {msg}")
-
-            # Fire CDP mouse events (generates isTrusted:true!)
             page.run_cdp('Input.dispatchMouseEvent', type='mouseMoved', x=cx, y=cy, button='none')
             page.run_cdp('Input.dispatchMouseEvent', type='mousePressed', x=cx, y=cy, button='left', buttons=1, clickCount=1)
             page.run_cdp('Input.dispatchMouseEvent', type='mouseReleased', x=cx, y=cy, button='left', buttons=0, clickCount=1)
 
-        # 6. WAIT FOR SUCCESS (Hyper-Fast Polling: 20Hz)
-        for _ in range(60): # 3.0s max wait (Poll every 0.05s)
-            # 6.1 Check iframe content directly via CDP for "Success!" (Highest Reliability)
-            try:
-                iframe_doc = page.run_cdp('DOM.getFlattenedDocument', depth=-1, pierce=True)
-                iframe_nodes = iframe_doc.get('nodes', [])
-                iframe_text = "".join([n.get('nodeValue', '') for n in iframe_nodes if n.get('nodeName') == '#text']).lower()
-                if "success!" in iframe_text:
-                    logger_obj.info("Cloudflare bypass verified via IFRAME internal text.")
-                    return True
-            except:
-                pass
-            
-            # 6.2 Check main page state
-            html_now = page.html.lower()
-            if 'just a moment' not in html_now and \
-               'verifying your connection' not in html_now and \
-               ('challenges.cloudflare.com' not in html_now or "success!" in html_now):
-                logger_obj.info("Cloudflare bypass verified via page state.")
+        if sync_broadcast and node_id:
+            sync_broadcast(f"[Node {node_id}] CDP clicks fired. Verifying...")
+
+        # Step 4: WAIT FOR SUCCESS (TURBO: 40 * 0.05s = 2s max)
+        for _ in range(40):
+            if is_cf_passed(page):
+                logger_obj.info("Cloudflare bypass verified.")
                 return True
-                
             time.sleep(0.05)
 
-        msg = "All CDP click ratios failed to bypass Cloudflare."
-        logger_obj.warning(msg)
+        logger_obj.warning("CDP clicks did not bypass Cloudflare.")
         if sync_broadcast and node_id:
-            sync_broadcast(f"[Node {node_id}] {msg}")
-        return False
-
-        msg = "All CDP click ratios failed to bypass Cloudflare."
-        logger_obj.warning(msg)
-        if sync_broadcast and node_id:
-            sync_broadcast(f"[Node {node_id}] {msg}")
+            sync_broadcast(f"[Node {node_id}] CDP clicks did not bypass Cloudflare.")
         return False
 
     except Exception as e:
